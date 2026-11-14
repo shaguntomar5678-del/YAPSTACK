@@ -1,81 +1,137 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Users,
   AlertTriangle,
   GitMerge,
   ShieldAlert,
   Search,
-  Filter,
   ArrowRight,
   Clock,
   Activity,
-  Layers,
 } from 'lucide-react';
 import { useApp } from '../../../context/AppContext';
-import { patientService, HospitalKPIs } from '../../../services/patientService';
+import { PatientSummary } from '../../../lib/schemas';
 import { Badge } from '../../common/Badge';
-import { OrganIndicator } from '../../common/OrganIndicator';
-import { formatTimeOnly } from '../../../utils/formatters';
 import { cn } from '../../../utils/cn';
-import { DeteriorationEvent } from '../../../types/patient';
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+const ORGAN_KEYS: Array<keyof PatientSummary['organs']> = [
+  'renal',
+  'hepatic',
+  'cardio',
+  'resp',
+];
+
+const ORGAN_LABELS: Record<string, string> = {
+  renal: 'R',
+  hepatic: 'H',
+  cardio: 'C',
+  resp: 'P',
+};
+
+function organDotClass(status: string): string {
+  switch (status) {
+    case 'elevated':
+      return 'bg-amber-400 border-amber-500';
+    case 'dysfunction_present':
+      return 'bg-red-500 border-red-600';
+    case 'low':
+      return 'bg-emerald-500 border-emerald-600';
+    case 'insufficient_data':
+    default:
+      return 'bg-slate-300 border-slate-400';
+  }
+}
+
+function trustBadgeClass(trust: string): string {
+  switch (trust) {
+    case 'high':
+      return 'bg-teal-50 text-teal-800 border-teal-200';
+    case 'moderate':
+      return 'bg-blue-50 text-blue-800 border-blue-200';
+    case 'medium':
+      return 'bg-yellow-50 text-yellow-800 border-yellow-200';
+    case 'low':
+      return 'bg-amber-50 text-amber-800 border-amber-200';
+    case 'insufficient':
+    default:
+      return 'bg-red-50 text-red-800 border-red-200';
+  }
+}
+
+function isMultiOrgan(p: PatientSummary): boolean {
+  return (
+    Object.values(p.organs).filter(
+      (o) => o.status === 'elevated' || o.status === 'dysfunction_present'
+    ).length >= 2
+  );
+}
+
+// ─── Component ──────────────────────────────────────────────────────────────
 
 export const CommandCenter: React.FC = () => {
   const {
     patients,
+    loadingPatients,
     searchQuery,
     setSearchQuery,
     navigateToPatient,
-    setSelectedOrganTab,
     language,
     t,
   } = useApp();
 
-  const [kpis, setKpis] = useState<HospitalKPIs | null>(null);
-  const [unitFilter, setUnitFilter] = useState<string>('All Units');
-  const [acuityFilter, setAcuityFilter] = useState<string>('All Tiers');
-  const [requiresReviewOnly, setRequiresReviewOnly] = useState<boolean>(false);
+  const [elevatedOnly, setElevatedOnly] = useState<boolean>(false);
   const [multiOrganOnly, setMultiOrganOnly] = useState<boolean>(false);
 
-  useEffect(() => {
-    patientService.getHospitalKPIs().then(setKpis);
-  }, [patients]);
+  // ─── KPI values ───────────────────────────────────────────────────────────
+  const kpiMonitored = patients.length;
+  const kpiReview = useMemo(
+    () => patients.filter((p) => p.elevated).length,
+    [patients]
+  );
+  const kpiMultiOrgan = useMemo(
+    () => patients.filter(isMultiOrgan).length,
+    [patients]
+  );
+  const kpiDataQuality = useMemo(
+    () =>
+      patients.filter(
+        (p) => p.trust === 'low' || p.trust === 'insufficient'
+      ).length,
+    [patients]
+  );
 
-  // Filtered patients
+  // ─── Filtered + sorted patient list ───────────────────────────────────────
   const filteredPatients = useMemo(() => {
-    return patients.filter((p) => {
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        const matches =
-          p.name.toLowerCase().includes(q) ||
-          p.id.toLowerCase().includes(q) ||
-          p.mrn.toLowerCase().includes(q) ||
-          p.primaryDiagnosis.toLowerCase().includes(q) ||
-          p.bed.toLowerCase().includes(q);
-        if (!matches) return false;
-      }
-      if (unitFilter !== 'All Units' && p.unit !== unitFilter) return false;
-      if (acuityFilter !== 'All Tiers' && p.acuityTier !== acuityFilter) return false;
-      if (requiresReviewOnly && !p.requiresReview) return false;
-      if (multiOrganOnly && !p.multiOrganPatternDetected) return false;
-      return true;
-    });
-  }, [patients, searchQuery, unitFilter, acuityFilter, requiresReviewOnly, multiOrganOnly]);
-
-  // Aggregate recent deterioration events across all monitored patients
-  const recentDeteriorationEvents = useMemo(() => {
-    const events: (DeteriorationEvent & { patientName: string; patientBed: string; patientId: string })[] = [];
-    patients.forEach((p) => {
-      p.deteriorationEvents.forEach((ev) => {
-        events.push({
-          ...ev,
-          patientName: p.name,
-          patientBed: p.bed,
-          patientId: p.id,
-        });
+    return patients
+      .filter((p) => {
+        if (searchQuery) {
+          const q = searchQuery.toLowerCase();
+          const matches =
+            p.id.toLowerCase().includes(q) ||
+            (p.note ?? '').toLowerCase().includes(q);
+          if (!matches) return false;
+        }
+        if (elevatedOnly && !p.elevated) return false;
+        if (multiOrganOnly && !isMultiOrgan(p)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const ar = a.risk_overall ?? -1;
+        const br = b.risk_overall ?? -1;
+        return br - ar;
       });
-    });
-    return events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  }, [patients]);
+  }, [patients, searchQuery, elevatedOnly, multiOrganOnly]);
+
+  // ─── Deterioration timeline ────────────────────────────────────────────────
+  const deteriorationPatients = useMemo(
+    () =>
+      patients
+        .filter((p) => p.elevated)
+        .sort((a, b) => (b.risk_overall ?? -1) - (a.risk_overall ?? -1)),
+    [patients]
+  );
 
   const tc = t.commandCenter;
 
@@ -87,9 +143,7 @@ export const CommandCenter: React.FC = () => {
           <h1 className="text-xl font-bold tracking-tight text-vitalis-navy">
             {tc.title}
           </h1>
-          <p className="text-xs text-vitalis-muted mt-0.5">
-            {tc.subtitle}
-          </p>
+          <p className="text-xs text-vitalis-muted mt-0.5">{tc.subtitle}</p>
         </div>
         <div className="flex items-center gap-2 text-xs text-vitalis-muted">
           <Clock className="w-3.5 h-3.5" />
@@ -99,7 +153,7 @@ export const CommandCenter: React.FC = () => {
 
       {/* Top 4 KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* KPI 1 */}
+        {/* KPI 1 – Monitored Patients */}
         <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle">
           <div className="flex items-center justify-between text-vitalis-muted mb-2">
             <span className="text-xs font-semibold uppercase tracking-wider">
@@ -109,20 +163,31 @@ export const CommandCenter: React.FC = () => {
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-vitalis-text font-mono">
-              {kpis?.monitoredPatients ?? patients.length}
+              {loadingPatients ? '—' : kpiMonitored}
             </span>
             <span className="text-xs text-vitalis-muted">{tc.kpiMonitoredSub}</span>
           </div>
           <div className="mt-3 flex items-center gap-1.5 text-[11px] text-vitalis-muted">
-            <span className="inline-block w-2 h-2 rounded-full bg-red-500" /> {kpis?.criticalCount ?? 2} {language === 'hi' ? 'अति-गंभीर' : 'Critical'}
+            <span className="inline-block w-2 h-2 rounded-full bg-red-500" />{' '}
+            {patients.filter((p) => p.elevated && (p.risk_overall ?? 0) >= 0.8).length}{' '}
+            {language === 'hi' ? 'अति-गंभीर' : 'Critical'}
             <span className="text-slate-300">•</span>
-            <span className="inline-block w-2 h-2 rounded-full bg-amber-500" /> {kpis?.urgentCount ?? 2} {language === 'hi' ? 'गंभीर' : 'Urgent'}
+            <span className="inline-block w-2 h-2 rounded-full bg-amber-500" />{' '}
+            {patients.filter(
+              (p) =>
+                p.elevated &&
+                (p.risk_overall ?? 0) >= 0.5 &&
+                (p.risk_overall ?? 0) < 0.8
+            ).length}{' '}
+            {language === 'hi' ? 'गंभीर' : 'Elevated'}
             <span className="text-slate-300">•</span>
-            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" /> {kpis?.stableCount ?? 2} {language === 'hi' ? 'स्थिर' : 'Stable'}
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />{' '}
+            {patients.filter((p) => !p.elevated).length}{' '}
+            {language === 'hi' ? 'स्थिर' : 'Stable'}
           </div>
         </div>
 
-        {/* KPI 2 */}
+        {/* KPI 2 – Requiring Review */}
         <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle border-l-4 border-l-vitalis-critical">
           <div className="flex items-center justify-between text-vitalis-muted mb-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-red-700">
@@ -132,16 +197,18 @@ export const CommandCenter: React.FC = () => {
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-vitalis-critical font-mono">
-              {kpis?.requiringReview ?? 4}
+              {loadingPatients ? '—' : kpiReview}
             </span>
             <span className="text-xs text-vitalis-muted">{tc.kpiReviewSub}</span>
           </div>
           <div className="mt-3 text-[11px] text-red-700 font-medium">
-            {language === 'hi' ? '२ आपातकालीन बहु-अङ्ग मूल्यांकन लंबित' : '2 pending emergent multi-organ evaluations'}
+            {language === 'hi'
+              ? 'ऊंचे जोखिम वाले रोगी — चिकित्सक ध्यान आवश्यक'
+              : 'Elevated-risk patients — physician attention required'}
           </div>
         </div>
 
-        {/* KPI 3 */}
+        {/* KPI 3 – Multi-Organ Patterns */}
         <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle border-l-4 border-l-vitalis-navy">
           <div className="flex items-center justify-between text-vitalis-muted mb-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-vitalis-navy">
@@ -151,16 +218,18 @@ export const CommandCenter: React.FC = () => {
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-vitalis-navy font-mono">
-              {kpis?.multiOrganPatterns ?? 4}
+              {loadingPatients ? '—' : kpiMultiOrgan}
             </span>
             <span className="text-xs text-vitalis-muted">{tc.kpiPatternsSub}</span>
           </div>
           <div className="mt-3 text-[11px] text-vitalis-muted">
-            {language === 'hi' ? 'कार्डियोरीनल, सेप्टिक शॉक एवं ARDS सोपान' : 'Cardiorenal, Septic Shock & ARDS cascades'}
+            {language === 'hi'
+              ? '≥2 अंग-तंत्रों में बढ़ा हुआ या शिथिलता स्तर'
+              : '≥2 organ systems at elevated or dysfunction status'}
           </div>
         </div>
 
-        {/* KPI 4 */}
+        {/* KPI 4 – Data Quality Issues */}
         <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle">
           <div className="flex items-center justify-between text-vitalis-muted mb-2">
             <span className="text-xs font-semibold uppercase tracking-wider">
@@ -170,56 +239,43 @@ export const CommandCenter: React.FC = () => {
           </div>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-bold text-amber-700 font-mono">
-              {kpis?.dataQualityIssues ?? 2}
+              {loadingPatients ? '—' : kpiDataQuality}
             </span>
             <span className="text-xs text-vitalis-muted">{tc.kpiTrustSub}</span>
           </div>
           <div className="mt-3 text-[11px] text-vitalis-muted">
-            {language === 'hi' ? '१ एबीजी विलंबता; १ यूरिमीटर अंतराल' : '1 ABG latency warning; 1 urimeter gap'}
+            {language === 'hi'
+              ? 'निम्न या अपर्याप्त डेटा विश्वसनीयता'
+              : 'Low or insufficient data trust level'}
           </div>
         </div>
       </div>
 
-      {/* Main Grid: Priority Table & Deterioration Events Timeline */}
+      {/* Main Grid: Priority Table & Deterioration Timeline */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         {/* Left 3 Cols: Patient Priority Table */}
         <div className="lg:col-span-3 space-y-3">
           {/* Filter Bar */}
           <div className="bg-card rounded-lg border border-vitalis-border p-3 shadow-subtle flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              {/* Unit Dropdown */}
-              <select
-                value={unitFilter}
-                onChange={(e) => setUnitFilter(e.target.value)}
-                className="bg-background border border-vitalis-border rounded-md px-2.5 py-1.5 text-xs text-vitalis-text focus:outline-none focus:border-vitalis-blue"
-              >
-                <option value="All Units">{tc.allUnits} ({patients.length})</option>
-                <option value="Medical ICU">Medical ICU</option>
-                <option value="Cardiac ICU">Cardiac ICU</option>
-                <option value="Surgical ICU">Surgical ICU</option>
-                <option value="Step-Down Unit">Step-Down Unit</option>
-                <option value="Telemetry">Telemetry</option>
-              </select>
+              {/* Search */}
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-vitalis-muted" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={language === 'hi' ? 'ID या नोट खोजें…' : 'Search by ID or note…'}
+                  className="pl-8 pr-3 py-1.5 bg-background border border-vitalis-border rounded-md text-xs text-vitalis-text focus:outline-none focus:border-vitalis-blue w-48"
+                />
+              </div>
 
-              {/* Acuity Dropdown */}
-              <select
-                value={acuityFilter}
-                onChange={(e) => setAcuityFilter(e.target.value)}
-                className="bg-background border border-vitalis-border rounded-md px-2.5 py-1.5 text-xs text-vitalis-text focus:outline-none focus:border-vitalis-blue"
-              >
-                <option value="All Tiers">{tc.allTiers}</option>
-                <option value="Critical">{language === 'hi' ? 'अति-गंभीर (Critical)' : 'Critical'}</option>
-                <option value="Urgent">{language === 'hi' ? 'गंभीर (Urgent)' : 'Urgent'}</option>
-                <option value="Guarded">{language === 'hi' ? 'सावधान (Guarded)' : 'Guarded'}</option>
-                <option value="Stable">{language === 'hi' ? 'स्थिर (Stable)' : 'Stable'}</option>
-              </select>
-
-              {/* Requires Review Filter */}
+              {/* Elevated Only Filter */}
               <button
-                onClick={() => setRequiresReviewOnly(!requiresReviewOnly)}
+                onClick={() => setElevatedOnly(!elevatedOnly)}
                 className={cn(
                   'px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors',
-                  requiresReviewOnly
+                  elevatedOnly
                     ? 'bg-red-50 text-red-800 border-red-300'
                     : 'bg-background text-vitalis-muted border-vitalis-border hover:bg-slate-100'
                 )}
@@ -242,8 +298,11 @@ export const CommandCenter: React.FC = () => {
             </div>
 
             <div className="text-xs text-vitalis-muted font-medium">
-              {tc.showing} <span className="font-mono text-vitalis-text font-bold">{filteredPatients.length}</span> {tc.of}{' '}
-              {patients.length} {tc.patients}
+              {tc.showing}{' '}
+              <span className="font-mono text-vitalis-text font-bold">
+                {filteredPatients.length}
+              </span>{' '}
+              {tc.of} {patients.length} {tc.patients}
             </div>
           </div>
 
@@ -253,28 +312,74 @@ export const CommandCenter: React.FC = () => {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50/80 border-b border-vitalis-border text-[11px] font-semibold text-vitalis-muted uppercase tracking-wider">
-                    <th className="py-2.5 px-4">{tc.thPatientBed}</th>
-                    <th className="py-2.5 px-3">{tc.thAcuity}</th>
-                    <th className="py-2.5 px-3">{tc.thRiskScore}</th>
+                    <th className="py-2.5 px-4">Patient / Note</th>
+                    <th className="py-2.5 px-3">Trust</th>
                     <th className="py-2.5 px-3">
-                      <span title="Renal, Hepatic, Cardiac, Respiratory">{tc.thOrgans}</span>
+                      <div>{tc.thRiskScore}</div>
+                      <div className="text-[9px] font-normal normal-case tracking-normal text-vitalis-muted mt-0.5">
+                        12 h horizon · Calibrated model output on proxy label
+                      </div>
                     </th>
-                    <th className="py-2.5 px-3">{tc.thDiagnosis}</th>
+                    <th className="py-2.5 px-3">
+                      <span title="Renal, Hepatic, Cardio, Respiratory">
+                        {tc.thOrgans}
+                      </span>
+                    </th>
+                    <th className="py-2.5 px-3">First Change</th>
+                    <th className="py-2.5 px-3">Top Reason</th>
                     <th className="py-2.5 px-4 text-right">{tc.thAction}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-vitalis-border/60 text-xs">
                   {filteredPatients.map((patient) => {
-                    const acuityVariants: Record<string, 'critical' | 'warning' | 'watch' | 'stable'> = {
-                      Critical: 'critical',
-                      Urgent: 'warning',
-                      Guarded: 'watch',
-                      Stable: 'stable',
-                    };
-
-                    const acuityLabel = language === 'hi'
-                      ? (patient.acuityTier === 'Critical' ? 'अति-गंभीर' : patient.acuityTier === 'Urgent' ? 'गंभीर' : patient.acuityTier === 'Guarded' ? 'सावधान' : 'स्थिर')
-                      : patient.acuityTier;
+                    // Risk score display
+                    let riskDisplay: React.ReactNode;
+                    if (patient.display_overall === 'shown' && patient.risk_overall != null) {
+                      const pct = (patient.risk_overall * 100).toFixed(1) + '%';
+                      const riskVal = patient.risk_overall;
+                      riskDisplay = (
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              'font-mono font-bold text-sm',
+                              riskVal >= 0.8
+                                ? 'text-vitalis-critical'
+                                : riskVal >= 0.5
+                                ? 'text-vitalis-warning'
+                                : 'text-emerald-700'
+                            )}
+                          >
+                            {pct}
+                          </span>
+                          <div className="w-14 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                            <div
+                              className={cn(
+                                'h-full rounded-full',
+                                riskVal >= 0.8
+                                  ? 'bg-vitalis-critical'
+                                  : riskVal >= 0.5
+                                  ? 'bg-vitalis-warning'
+                                  : 'bg-emerald-500'
+                              )}
+                              style={{ width: `${riskVal * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    } else if (patient.display_overall === 'data_insufficient') {
+                      riskDisplay = (
+                        <span className="text-vitalis-muted italic">
+                          Insufficient data
+                        </span>
+                      );
+                    } else {
+                      // not_applicable
+                      riskDisplay = (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-50 text-orange-700 border border-orange-200">
+                          Dysfunction present
+                        </span>
+                      );
+                    }
 
                     return (
                       <tr
@@ -282,93 +387,85 @@ export const CommandCenter: React.FC = () => {
                         onClick={() => navigateToPatient(patient.id, 'patient-360')}
                         className="hover:bg-slate-50/80 cursor-pointer transition-colors group"
                       >
-                        {/* Patient info */}
+                        {/* Patient ID + note */}
                         <td className="py-3 px-4">
-                          <div className="font-semibold text-vitalis-navy group-hover:text-vitalis-blue transition-colors text-sm">
-                            {patient.name}
+                          <div className="font-semibold text-vitalis-navy group-hover:text-vitalis-blue transition-colors text-sm font-mono">
+                            {patient.id}
                           </div>
-                          <div className="flex items-center gap-1.5 text-[11px] text-vitalis-muted mt-0.5">
-                            <span className="font-mono font-medium">{patient.id}</span>
-                            <span>•</span>
-                            <span className="font-medium text-slate-700">{patient.bed}</span>
-                            <span>•</span>
-                            <span>{patient.unit}</span>
-                          </div>
-                        </td>
-
-                        {/* Acuity */}
-                        <td className="py-3 px-3">
-                          <Badge variant={acuityVariants[patient.acuityTier]} dot size="sm">
-                            {acuityLabel}
-                          </Badge>
-                          {patient.requiresReview && (
-                            <span className="block mt-1 text-[10px] text-red-600 font-semibold">
-                              {tc.needsReviewBadge}
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Composite Risk Score */}
-                        <td className="py-3 px-3">
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={cn(
-                                'font-mono font-bold text-sm',
-                                patient.riskScore >= 80
-                                  ? 'text-vitalis-critical'
-                                  : patient.riskScore >= 60
-                                  ? 'text-vitalis-warning'
-                                  : 'text-emerald-700'
-                              )}
-                            >
-                              {patient.riskScore}
-                            </span>
-                            <div className="w-14 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                              <div
-                                className={cn(
-                                  'h-full rounded-full',
-                                  patient.riskScore >= 80
-                                    ? 'bg-vitalis-critical'
-                                    : patient.riskScore >= 60
-                                    ? 'bg-vitalis-warning'
-                                    : 'bg-emerald-500'
-                                )}
-                                style={{ width: `${patient.riskScore}%` }}
-                              />
+                          {patient.note && (
+                            <div className="text-[11px] text-vitalis-muted mt-0.5 truncate max-w-[180px]" title={patient.note}>
+                              {patient.note}
                             </div>
+                          )}
+                          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                            <span className="text-[10px] text-vitalis-muted">
+                              {patient.gender === 0 ? 'F' : 'M'}, {patient.age}y
+                            </span>
+                            {patient.source === 'synthetic' && (
+                              <span className="text-[9px] text-vitalis-muted italic">
+                                Simulated patient
+                              </span>
+                            )}
                           </div>
-                          <span className="text-[10px] text-vitalis-muted">
-                            {tc.dayInIcu.replace('{day}', String(patient.icuDay))}
+                        </td>
+
+                        {/* Trust badge */}
+                        <td className="py-3 px-3">
+                          <span
+                            className={cn(
+                              'inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold border capitalize',
+                              trustBadgeClass(patient.trust)
+                            )}
+                          >
+                            {patient.trust}
                           </span>
                         </td>
 
-                        {/* 4 Organ Status Indicators */}
+                        {/* Risk Score */}
+                        <td className="py-3 px-3">{riskDisplay}</td>
+
+                        {/* Organ dots */}
                         <td className="py-3 px-3">
-                          <OrganIndicator
-                            organStatuses={patient.organStatuses}
-                            size="sm"
-                            onOrganClick={(organ) => {
-                              setSelectedOrganTab(organ);
-                              navigateToPatient(patient.id, 'organ-intelligence');
-                            }}
-                          />
-                          {patient.multiOrganPatternDetected && (
-                            <div className="mt-1 flex items-center gap-1 text-[10px] text-sky-800 font-medium">
-                              <Layers className="w-3 h-3 text-vitalis-blue" />
-                              <span>{tc.multiOrganLink}</span>
-                            </div>
-                          )}
+                          <div className="flex items-center gap-1">
+                            {ORGAN_KEYS.map((organ) => {
+                              const orgData = patient.organs[organ];
+                              const status = orgData?.status ?? 'insufficient_data';
+                              return (
+                                <div
+                                  key={organ}
+                                  title={`${organ}: ${status}`}
+                                  className={cn(
+                                    'w-4 h-4 rounded-full border flex items-center justify-center',
+                                    organDotClass(status)
+                                  )}
+                                >
+                                  <span className="text-[8px] font-bold text-white leading-none">
+                                    {ORGAN_LABELS[organ]}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </td>
 
-                        {/* Primary Diagnosis */}
-                        <td className="py-3 px-3 max-w-xs">
-                          <div className="truncate font-medium text-vitalis-text" title={patient.primaryDiagnosis}>
-                            {patient.primaryDiagnosis}
-                          </div>
-                          {patient.patternDescription && (
-                            <div className="text-[11px] text-vitalis-muted truncate mt-0.5" title={patient.patternDescription}>
-                              {patient.patternDescription}
+                        {/* First Change */}
+                        <td className="py-3 px-3 font-mono text-[11px] text-vitalis-text whitespace-nowrap">
+                          {patient.first_change
+                            ? `${patient.first_change.organ} h${patient.first_change.hour}`
+                            : '—'}
+                        </td>
+
+                        {/* Top Reason */}
+                        <td className="py-3 px-3 max-w-[160px]">
+                          {patient.top_reason ? (
+                            <div
+                              className="truncate text-[11px] text-vitalis-muted"
+                              title={patient.top_reason}
+                            >
+                              {patient.top_reason}
                             </div>
+                          ) : (
+                            <span className="text-[11px] text-slate-300">—</span>
                           )}
                         </td>
 
@@ -399,9 +496,7 @@ export const CommandCenter: React.FC = () => {
                 <button
                   onClick={() => {
                     setSearchQuery('');
-                    setUnitFilter('All Units');
-                    setAcuityFilter('All Tiers');
-                    setRequiresReviewOnly(false);
+                    setElevatedOnly(false);
                     setMultiOrganOnly(false);
                   }}
                   className="mt-2 text-xs text-vitalis-blue font-semibold hover:underline"
@@ -413,7 +508,7 @@ export const CommandCenter: React.FC = () => {
           </div>
         </div>
 
-        {/* Right 1 Col: Recent Deterioration Event Timeline */}
+        {/* Right 1 Col: Deterioration Timeline */}
         <div className="space-y-3">
           <div className="bg-card rounded-lg border border-vitalis-border p-3.5 shadow-subtle flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -428,47 +523,54 @@ export const CommandCenter: React.FC = () => {
           </div>
 
           <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-4 max-h-[640px] overflow-y-auto">
-            {recentDeteriorationEvents.map((evt) => {
-              return (
-                <div
-                  key={evt.id}
-                  onClick={() => navigateToPatient(evt.patientId, 'patient-360')}
-                  className="group cursor-pointer border-l-2 border-vitalis-critical pl-3 py-1 space-y-1.5 hover:bg-slate-50 rounded-r transition-colors"
-                >
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="font-semibold text-vitalis-navy group-hover:text-vitalis-blue text-xs">
-                      {evt.patientName} ({evt.patientBed})
-                    </span>
+            {deteriorationPatients.map((p) => (
+              <div
+                key={p.id}
+                onClick={() => navigateToPatient(p.id, 'patient-360')}
+                className="group cursor-pointer border-l-2 border-vitalis-critical pl-3 py-1 space-y-1.5 hover:bg-slate-50 rounded-r transition-colors"
+              >
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-vitalis-navy group-hover:text-vitalis-blue text-xs font-mono">
+                    {p.id}
+                  </span>
+                  {p.risk_overall != null && p.display_overall === 'shown' && (
                     <span className="font-mono text-[10px] text-vitalis-muted">
-                      {formatTimeOnly(evt.timestamp)}
+                      {(p.risk_overall * 100).toFixed(1)}%
                     </span>
-                  </div>
-
-                  <div className="text-xs font-semibold text-slate-800">
-                    {evt.title}
-                  </div>
-
-                  <p className="text-[11px] text-vitalis-muted leading-relaxed line-clamp-2">
-                    {evt.description}
-                  </p>
-
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {evt.observedParameters.slice(0, 2).map((p, pIdx) => (
-                      <span
-                        key={pIdx}
-                        className="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-700 border border-slate-200"
-                      >
-                        {p.name}: <strong>{p.value}</strong>
-                      </span>
-                    ))}
-                  </div>
+                  )}
                 </div>
-              );
-            })}
 
-            {recentDeteriorationEvents.length === 0 && (
+                {p.note && (
+                  <div className="text-[11px] text-slate-700 font-medium truncate">
+                    {p.note}
+                  </div>
+                )}
+
+                {p.top_reason && (
+                  <p className="text-[11px] text-vitalis-muted leading-relaxed line-clamp-2">
+                    {p.top_reason}
+                  </p>
+                )}
+
+                {p.first_change && (
+                  <div className="text-[10px] text-vitalis-muted font-mono">
+                    First change: {p.first_change.organ} at h{p.first_change.hour}
+                  </div>
+                )}
+
+                {p.source === 'synthetic' && (
+                  <span className="text-[9px] text-vitalis-muted italic">
+                    Simulated patient
+                  </span>
+                )}
+              </div>
+            ))}
+
+            {deteriorationPatients.length === 0 && (
               <div className="py-6 text-center text-xs text-vitalis-muted">
-                {language === 'hi' ? 'वर्तमान अंतराल में कोई घटना नहीं।' : 'No active deterioration events logged in current window.'}
+                {language === 'hi'
+                  ? 'वर्तमान अंतराल में कोई ऊंचे जोखिम वाले रोगी नहीं।'
+                  : 'No elevated-risk patients in current window.'}
               </div>
             )}
           </div>

@@ -9,6 +9,7 @@ import { FutureCast } from './components/pages/FutureCast';
 import { WhatIfLab } from './components/pages/WhatIfLab';
 import { AlertCenter } from './components/pages/AlertCenter';
 import { DataTrust } from './components/pages/DataTrust';
+import { ModelCard } from './components/pages/ModelCard';
 
 const MainContent: React.FC = () => {
   const { currentPage } = useApp();
@@ -23,6 +24,7 @@ const MainContent: React.FC = () => {
       {currentPage === 'whatif' && <WhatIfLab />}
       {currentPage === 'alerts' && <AlertCenter />}
       {currentPage === 'data-trust' && <DataTrust />}
+      {currentPage === 'model-card' && <ModelCard />}
     </Shell>
   );
 };

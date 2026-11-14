@@ -1,10 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
-import { Patient } from '../types/patient';
-import { ClinicalAlert } from '../types/alert';
-import { OrganType } from '../types/organ';
-import { patientService } from '../services/patientService';
-import { alertService } from '../services/alertService';
 import { translations, Language } from '../utils/translations';
+import { OrganType } from '../types/organ';
+import { PatientSummary } from '../lib/schemas';
+import { fetchPatients } from '../lib/dataClient';
 
 export type AppPage =
   | 'command-center'
@@ -14,7 +12,8 @@ export type AppPage =
   | 'futurecast'
   | 'whatif'
   | 'alerts'
-  | 'data-trust';
+  | 'data-trust'
+  | 'model-card';
 
 interface AppContextValue {
   language: Language;
@@ -22,19 +21,34 @@ interface AppContextValue {
   t: typeof translations['en'];
   currentPage: AppPage;
   setCurrentPage: (page: AppPage) => void;
+
+  // Active patient
   selectedPatientId: string;
   setSelectedPatientId: (id: string) => void;
-  selectedPatient: Patient | null;
-  patients: Patient[];
+
+  // Replay clock: anchor hour selected across Patient 360, FutureCast, DataTrust, etc.
+  selectedAnchorHour: number;
+  setSelectedAnchorHour: (hour: number) => void;
+
+  // Patient list from JSON (replaces old Patient[] type)
+  patients: PatientSummary[];
   loadingPatients: boolean;
+
+  // Organ tab
   selectedOrganTab: OrganType;
   setSelectedOrganTab: (tab: OrganType) => void;
+
+  // Search
   searchQuery: string;
   setSearchQuery: (query: string) => void;
-  alerts: ClinicalAlert[];
+
+  // Alert badge count (derived: elevated patients count)
   unacknowledgedAlertCount: number;
+
+  // Navigation helper
   navigateToPatient: (patientId: string, page?: AppPage) => void;
-  acknowledgeAlert: (alertId: string, clinician: string, notes: string) => Promise<void>;
+
+  // Refresh
   refreshAll: () => Promise<void>;
 }
 
@@ -43,53 +57,36 @@ const AppContext = createContext<AppContextValue | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<Language>('en');
   const [currentPage, setCurrentPage] = useState<AppPage>('command-center');
-  const [selectedPatientId, setSelectedPatientId] = useState<string>('PAT-1082');
-  const [patients, setPatients] = useState<Patient[]>([]);
+  const [selectedPatientId, setSelectedPatientId] = useState<string>('V-104');
+  const [selectedAnchorHour, setSelectedAnchorHour] = useState<number>(92); // latest anchor by default
+  const [patients, setPatients] = useState<PatientSummary[]>([]);
   const [loadingPatients, setLoadingPatients] = useState<boolean>(true);
   const [selectedOrganTab, setSelectedOrganTab] = useState<OrganType>('renal');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [alerts, setAlerts] = useState<ClinicalAlert[]>([]);
 
   const t = useMemo(() => translations[language], [language]);
 
   const loadData = async () => {
     setLoadingPatients(true);
     try {
-      const [fetchedPatients, fetchedAlerts] = await Promise.all([
-        patientService.getPatients(),
-        alertService.getAlerts(),
-      ]);
-      setPatients(fetchedPatients);
-      setAlerts(fetchedAlerts);
+      const fetched = await fetchPatients();
+      setPatients(fetched);
     } catch (err) {
-      console.error('Failed to load initial clinical data', err);
+      console.error('Failed to load patient list', err);
     } finally {
       setLoadingPatients(false);
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const selectedPatient = useMemo(() => {
-    return patients.find((p) => p.id === selectedPatientId) || patients[0] || null;
-  }, [patients, selectedPatientId]);
+  useEffect(() => { loadData(); }, []);
 
   const unacknowledgedAlertCount = useMemo(() => {
-    return alerts.filter((a) => !a.acknowledged).length;
-  }, [alerts]);
+    return patients.filter((p) => p.elevated).length;
+  }, [patients]);
 
   const navigateToPatient = (patientId: string, page: AppPage = 'patient-360') => {
     setSelectedPatientId(patientId);
     setCurrentPage(page);
-  };
-
-  const handleAcknowledgeAlert = async (alertId: string, clinician: string, notes: string) => {
-    const updated = await alertService.acknowledgeAlert(alertId, clinician, notes);
-    if (updated) {
-      setAlerts((prev) => prev.map((a) => (a.id === alertId ? updated : a)));
-    }
   };
 
   return (
@@ -102,17 +99,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentPage,
         selectedPatientId,
         setSelectedPatientId,
-        selectedPatient,
+        selectedAnchorHour,
+        setSelectedAnchorHour,
         patients,
         loadingPatients,
         selectedOrganTab,
         setSelectedOrganTab,
         searchQuery,
         setSearchQuery,
-        alerts,
         unacknowledgedAlertCount,
         navigateToPatient,
-        acknowledgeAlert: handleAcknowledgeAlert,
         refreshAll: loadData,
       }}
     >

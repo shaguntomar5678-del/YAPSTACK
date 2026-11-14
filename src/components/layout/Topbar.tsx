@@ -3,8 +3,7 @@ import {
   Search,
   Bell,
   ChevronRight,
-  Globe,
-  User,
+  FlaskConical,
 } from 'lucide-react';
 import { useApp, AppPage } from '../../context/AppContext';
 import { cn } from '../../utils/cn';
@@ -13,7 +12,7 @@ export const Topbar: React.FC = () => {
   const {
     currentPage,
     setCurrentPage,
-    selectedPatient,
+    selectedPatientId,
     searchQuery,
     setSearchQuery,
     unacknowledgedAlertCount,
@@ -25,12 +24,13 @@ export const Topbar: React.FC = () => {
   const pageTitles: Record<AppPage, { en: string; hi: string }> = {
     'command-center': { en: 'Command Center', hi: 'कमांड सेंटर' },
     'patient-360': { en: 'Patient 360', hi: 'रोगी ३६०°' },
-    'organ-intelligence': { en: 'Organ Intelligence', hi: 'अङ्ग प्रज्ञा' },
+    'organ-intelligence': { en: 'Organ Intelligence', hi: 'अंग प्रज्ञा' },
     'cascade-graph': { en: 'Cascade Graph', hi: 'सोपान आरेख' },
     futurecast: { en: 'FutureCast', hi: 'भविष्य-दर्शन' },
     whatif: { en: 'What-if Lab', hi: 'यदि-प्रयोगशाला' },
     alerts: { en: 'Alert Center', hi: 'चेतावनी केंद्र' },
     'data-trust': { en: 'Data Trust', hi: 'डेटा विश्वसनीयता' },
+    'model-card': { en: 'Model Card', hi: 'मॉडल कार्ड' },
   };
 
   const activeTitle = language === 'hi' ? pageTitles[currentPage].hi : pageTitles[currentPage].en;
@@ -40,21 +40,21 @@ export const Topbar: React.FC = () => {
       {/* Breadcrumbs */}
       <div className="flex items-center gap-2 text-xs">
         <span className="font-bold text-vitalis-navy tracking-wide">
-          {language === 'hi' ? 'अङ्गसूत्र (ASt)' : 'ANGASUTRA'}
+          {language === 'hi' ? 'अंगसूत्र (ASt)' : 'ANGASUTRA'}
         </span>
         <ChevronRight className="w-3.5 h-3.5 text-vitalis-muted" />
         <span className="text-vitalis-text font-semibold">{activeTitle}</span>
-        {selectedPatient && currentPage !== 'command-center' && (
+        {selectedPatientId && currentPage !== 'command-center' && currentPage !== 'model-card' && (
           <>
             <ChevronRight className="w-3.5 h-3.5 text-vitalis-muted" />
             <span className="text-vitalis-navy font-semibold bg-vitalis-navy/5 px-2 py-0.5 rounded border border-vitalis-navy/10">
-              {selectedPatient.name} ({selectedPatient.id})
+              {selectedPatientId}
             </span>
           </>
         )}
       </div>
 
-      {/* Center Search & Global Filter */}
+      {/* Center Search */}
       <div className="flex-1 max-w-md mx-6">
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-vitalis-muted" />
@@ -76,9 +76,9 @@ export const Topbar: React.FC = () => {
         </div>
       </div>
 
-      {/* Right Controls: Language Switcher, Notifications, User Profile */}
+      {/* Right Controls */}
       <div className="flex items-center gap-4">
-        {/* Language Switcher (English / हिन्दी) */}
+        {/* Language Switcher */}
         <div className="flex items-center bg-[#F3F6FA] border border-vitalis-border rounded-md p-0.5 shadow-subtle">
           <button
             type="button"
@@ -102,17 +102,17 @@ export const Topbar: React.FC = () => {
                 ? 'bg-vitalis-navy text-white font-semibold shadow-subtle'
                 : 'text-vitalis-muted hover:text-vitalis-text'
             )}
-            title="हिन्दी में बदलें (Switch to Hindi)"
+            title="हिन्दी में बदलें"
           >
             हिन्दी
           </button>
         </div>
 
-        {/* Notifications / Alert Trigger */}
+        {/* Notifications */}
         <button
           onClick={() => setCurrentPage('alerts')}
           className="relative p-2 text-vitalis-muted hover:text-vitalis-navy rounded-md hover:bg-slate-100 transition-colors"
-          title={language === 'hi' ? 'चिकित्सीय चेतावनियां (Alerts)' : 'Clinical Alerts'}
+          title="Clinical Alerts"
         >
           <Bell className="w-4 h-4" />
           {unacknowledgedAlertCount > 0 && (
@@ -122,7 +122,22 @@ export const Topbar: React.FC = () => {
           )}
         </button>
 
-        {/* User Profile - Indian Attending Physician */}
+        {/* Model Card quick-link */}
+        <button
+          onClick={() => setCurrentPage('model-card')}
+          className={cn(
+            'flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border transition-all font-medium',
+            currentPage === 'model-card'
+              ? 'bg-vitalis-navy text-white border-vitalis-navy'
+              : 'text-vitalis-muted border-vitalis-border hover:border-vitalis-blue hover:text-vitalis-navy'
+          )}
+          title="ML Model Card"
+        >
+          <FlaskConical className="w-3.5 h-3.5" />
+          {language === 'hi' ? 'मॉडल' : 'Model Card'}
+        </button>
+
+        {/* User Profile */}
         <div className="flex items-center gap-2.5 pl-3 border-l border-vitalis-border">
           <div className="w-8 h-8 rounded-full bg-vitalis-navy/10 border border-vitalis-navy/20 flex items-center justify-center text-vitalis-navy font-semibold text-xs">
             AM
@@ -132,7 +147,7 @@ export const Topbar: React.FC = () => {
               {language === 'hi' ? 'डॉ. अदिति मुखर्जी, MD' : 'Dr. Aditi Mukherjee, MD'}
             </div>
             <div className="text-[10px] text-vitalis-muted">
-              {language === 'hi' ? 'वरिष्ठ गहन चिकित्सा विशेषज्ञ (CCM)' : 'Critical Care Medicine Attending'}
+              {language === 'hi' ? 'वरिष्ठ गहन चिकित्सा विशेषज्ञ' : 'Critical Care Medicine Attending'}
             </div>
           </div>
         </div>
