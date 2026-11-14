@@ -47,6 +47,20 @@ export async function fetchManifest(): Promise<Manifest> {
   return result.data;
 }
 
+const INDIAN_PATIENT_INFO: Record<string, { name: string; bed: string }> = {
+  'V-104': { name: 'Vikram Sharma', bed: 'ICU-B04' },
+  'P-201': { name: 'Priya Patel', bed: 'ICU-A01' },
+  'P-202': { name: 'Rajesh Kumar', bed: 'ICU-A02' },
+  'P-203': { name: 'Sunita Verma', bed: 'ICU-A03' },
+  'P-204': { name: 'Anil Deshmukh', bed: 'ICU-B01' },
+  'P-205': { name: 'Kavita Reddy', bed: 'ICU-B02' },
+  'P-206': { name: 'Arjun Nair', bed: 'ICU-B03' },
+  'P-207': { name: 'Deepak Joshi', bed: 'ICU-C01' },
+  'P-208': { name: 'Meera Iyer', bed: 'ICU-C02' },
+  'P-209': { name: 'Rohan Gupta', bed: 'ICU-C03' },
+  'P-210': { name: 'Ananya Sen', bed: 'ICU-C04' },
+};
+
 export async function fetchPatients(): Promise<PatientSummary[]> {
   const raw = await fetchJson('/data/patients.json');
   const result = PatientsListSchema.safeParse(raw);
@@ -54,52 +68,44 @@ export async function fetchPatients(): Promise<PatientSummary[]> {
     console.error('patients.json validation error:', result.error.flatten());
     return [];
   }
+  return result.data.map((p) => {
+    const info = INDIAN_PATIENT_INFO[p.id];
+    return {
+      ...p,
+      name: info?.name ?? `Patient ${p.id}`,
+      bed: info?.bed ?? 'ICU',
+    };
+  });
+}
+
+export async function fetchPatientRecord(id: string): Promise<PatientRecord> {
+  const raw = await fetchJson(`/data/patients/${id}.json`);
+  const result = PatientRecordSchema.safeParse(raw);
+  if (!result.success) {
+    console.error(`patients/${id}.json validation error:`, result.error.flatten());
+    throw new Error(`Validation failed for patient record ${id}`);
+  }
   return result.data;
 }
 
-export async function fetchPatientRecord(id: string): Promise<PatientRecord | null> {
-  try {
-    const raw = await fetchJson(`/data/patients/${id}.json`);
-    const result = PatientRecordSchema.safeParse(raw);
-    if (!result.success) {
-      console.error(`patients/${id}.json validation error:`, result.error.flatten());
-      return null;
-    }
-    return result.data;
-  } catch (e) {
-    console.error(`Failed to load patient record ${id}:`, e);
-    return null;
+export async function fetchWhatIf(patientId: string): Promise<WhatIf> {
+  const raw = await fetchJson(`/data/whatif_${patientId}.json`);
+  const result = WhatIfSchema.safeParse(raw);
+  if (!result.success) {
+    console.error(`whatif_${patientId}.json validation error:`, result.error.flatten());
+    throw new Error(`Validation failed for whatif_${patientId}.json`);
   }
+  return result.data;
 }
 
-export async function fetchWhatIf(patientId: string): Promise<WhatIf | null> {
-  try {
-    const raw = await fetchJson(`/data/whatif_${patientId}.json`);
-    const result = WhatIfSchema.safeParse(raw);
-    if (!result.success) {
-      console.error(`whatif_${patientId}.json validation error:`, result.error.flatten());
-      return null;
-    }
-    return result.data;
-  } catch (e) {
-    console.error(`Failed to load whatif for ${patientId}:`, e);
-    return null;
+export async function fetchModelCard(): Promise<ModelCard> {
+  const raw = await fetchJson('/data/model_card.json');
+  const result = ModelCardSchema.safeParse(raw);
+  if (!result.success) {
+    console.error('model_card.json validation error:', result.error.flatten());
+    throw new Error('Validation failed for model_card.json');
   }
-}
-
-export async function fetchModelCard(): Promise<ModelCard | null> {
-  try {
-    const raw = await fetchJson('/data/model_card.json');
-    const result = ModelCardSchema.safeParse(raw);
-    if (!result.success) {
-      console.error('model_card.json validation error:', result.error.flatten());
-      return null;
-    }
-    return result.data;
-  } catch (e) {
-    console.error('Failed to load model_card.json:', e);
-    return null;
-  }
+  return result.data;
 }
 
 /** Clear the in-memory cache (useful for hot-reload in dev) */

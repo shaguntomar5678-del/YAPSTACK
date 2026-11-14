@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import {
   ResponsiveContainer,
   ComposedChart,
-  Area,
   Line,
   XAxis,
   YAxis,
@@ -14,287 +13,357 @@ import {
   TrendingUp,
   ShieldAlert,
   Layers,
+  Clock,
+  ChevronDown,
+  AlertTriangle,
+  Info,
 } from 'lucide-react';
 import { useApp } from '../../../context/AppContext';
-import { futurecastService } from '../../../services/futurecastService';
-import { FutureCastPrediction, PredictionHorizon } from '../../../types/futurecast';
+import { usePatient } from '../../../lib/hooks';
 import { Badge } from '../../common/Badge';
-import { MetricCard } from '../../common/MetricCard';
+import {
+  formatRiskPercent,
+  RISK_DISCLAIMER_CAPTION,
+} from '../../../utils/formatters';
 import { cn } from '../../../utils/cn';
 
 export const FutureCast: React.FC = () => {
-  const { selectedPatient, patients, setSelectedPatientId, language, t } = useApp();
-  const [horizon, setHorizon] = useState<PredictionHorizon>('24h');
-  const [prediction, setPrediction] = useState<FutureCastPrediction | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const {
+    selectedPatientId,
+    setSelectedPatientId,
+    selectedAnchorHour,
+    setSelectedAnchorHour,
+    patients,
+    language,
+    t,
+  } = useApp();
 
-  useEffect(() => {
-    if (selectedPatient) {
-      setLoading(true);
-      futurecastService.getPrediction(selectedPatient.id, horizon).then((res) => {
-        setPrediction(res);
-        setLoading(false);
+  const { data: patient, loading, error } = usePatient(selectedPatientId);
+
+  const patientSummary = useMemo(() => {
+    return patients?.find((p) => p.id === selectedPatientId);
+  }, [patients, selectedPatientId]);
+
+  const anchors = useMemo(() => patient?.anchors ?? [], [patient]);
+
+  const currentAnchor = useMemo(() => {
+    if (!anchors.length) return null;
+    const found = anchors.find((a) => a.hour === selectedAnchorHour);
+    return found || anchors[anchors.length - 1];
+  }, [anchors, selectedAnchorHour]);
+
+  // Lookup FutureCast entry for current anchor hour
+  const fcEntry = useMemo(() => {
+    if (!patient?.futurecast || !currentAnchor) return null;
+    return patient.futurecast[String(currentAnchor.hour)];
+  }, [patient?.futurecast, currentAnchor]);
+
+  const isDataInsufficient = fcEntry === 'data_insufficient' || !fcEntry;
+
+  // Build chart points combining historical anchors and futurecast points
+  const chartPoints = useMemo(() => {
+    if (!patient || !currentAnchor) return [];
+
+    // Historical points: last 4 anchors up to currentAnchor
+    const histAnchors = anchors.filter((a) => a.hour <= currentAnchor.hour).slice(-4);
+
+    const points: Array<{
+      hour: number;
+      label: string;
+      historical?: number | null;
+      stable?: number | null;
+      trend_continues?: number | null;
+      isProjected?: boolean;
+    }> = histAnchors.map((a) => ({
+      hour: a.hour,
+      label: `${a.hour}h`,
+      historical: a.risk_overall !== null ? a.risk_overall * 100 : null,
+      stable: a.hour === currentAnchor.hour && a.risk_overall !== null ? a.risk_overall * 100 : undefined,
+      trend_continues: a.hour === currentAnchor.hour && a.risk_overall !== null ? a.risk_overall * 100 : undefined,
+      isProjected: false,
+    }));
+
+    // If futurecast scenarios exist, add them
+    if (!isDataInsufficient && typeof fcEntry === 'object' && fcEntry !== null) {
+      const stableMap = new Map((fcEntry.stable || []).map((p) => [p.hour, p.risk_overall]));
+      const trendMap = new Map((fcEntry.trend_continues || []).map((p) => [p.hour, p.risk_overall]));
+
+      const futureHours = Array.from(new Set([...stableMap.keys(), ...trendMap.keys()])).sort(
+        (a, b) => a - b
+      );
+
+      futureHours.forEach((h) => {
+        const sVal = stableMap.get(h);
+        const tVal = trendMap.get(h);
+        points.push({
+          hour: h,
+          label: `+${h - currentAnchor.hour}h (${h}h)`,
+          historical: undefined,
+          stable: sVal !== null && sVal !== undefined ? sVal * 100 : null,
+          trend_continues: tVal !== null && tVal !== undefined ? tVal * 100 : null,
+          isProjected: true,
+        });
       });
     }
-  }, [selectedPatient, horizon]);
 
-  if (!selectedPatient) return null;
+    return points;
+  }, [patient, currentAnchor, fcEntry, isDataInsufficient, anchors]);
 
-  const tf = t.futurecast;
+  if (loading) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        Loading predictive trajectories...
+      </div>
+    );
+  }
 
-  // Chart data formatting with shaded uncertainty interval
-  const chartPoints = prediction
-    ? prediction.trajectory.map((p) => ({
-        time: p.hourOffset === 0 ? (language === 'hi' ? 'वर्तमान' : 'Now') : p.hourOffset > 0 ? `+${p.hourOffset}h` : `${p.hourOffset}h`,
-        actual: p.isHistorical ? p.actualRiskScore : undefined,
-        median: !p.isHistorical || p.hourOffset === 0 ? p.projectedMedian : undefined,
-        worsening: !p.isHistorical || p.hourOffset === 0 ? p.worseningScenario : undefined,
-        stable: !p.isHistorical || p.hourOffset === 0 ? p.stableScenario : undefined,
-        uncertaintyLower: !p.isHistorical ? p.uncertaintyLower : undefined,
-        uncertaintyRange: !p.isHistorical ? [p.uncertaintyLower, p.uncertaintyUpper] : undefined,
-        isHistorical: p.isHistorical,
-      }))
-    : [];
+  if (error || !patient) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        <p className="text-vitalis-critical">
+          {error || 'Patient prediction record could not be loaded.'}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Header with Horizon Selector & Patient Switcher */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      {/* Header & Controls */}
+      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-vitalis-navy flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-vitalis-blue" />
-              {tf.title}
+              <TrendingUp className="w-5 h-5 text-vitalis-teal" />
+              <span>{language === 'hi' ? 'भविष्य-दर्शन (फ्यूचरकास्ट)' : 'FutureCast Trajectory Projections'}</span>
             </h1>
-            <Badge variant="navy" size="xs">
-              {language === 'hi' ? 'अनुरूप पूर्वानुमान' : 'Conformal Forecast'}
+            <Badge variant="teal" size="xs">
+              12h Forward Horizons
             </Badge>
           </div>
           <p className="text-xs text-vitalis-muted mt-0.5">
-            {tf.subtitle}
+            Forward progression modelling across stable and deteriorating pathophysiological scenarios
           </p>
         </div>
 
-        {/* Controls: Horizon Selector & Patient Picker */}
+        {/* Patient & Anchor Selectors */}
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center bg-[#F3F6FA] p-1 rounded-md border border-vitalis-border text-xs">
-            {(['6h', '12h', '24h', '48h'] as PredictionHorizon[]).map((hz) => (
-              <button
-                key={hz}
-                onClick={() => setHorizon(hz)}
-                className={cn(
-                  'px-3 py-1 rounded font-medium transition-all',
-                  horizon === hz
-                    ? 'bg-vitalis-navy text-white shadow-subtle font-semibold'
-                    : 'text-vitalis-muted hover:text-vitalis-navy'
-                )}
-              >
-                {hz} {tf.horizon}
-              </button>
-            ))}
-          </div>
-
-          <select
-            value={selectedPatient.id}
-            onChange={(e) => setSelectedPatientId(e.target.value)}
-            className="bg-background border border-vitalis-border rounded-md px-2.5 py-1 text-xs text-vitalis-text focus:outline-none focus:border-vitalis-blue"
-          >
-            {patients.map((pt) => (
-              <option key={pt.id} value={pt.id}>
-                {pt.name} ({pt.bed})
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* 4 Summary Prediction Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard
-          title={tf.decompRisk}
-          value={prediction ? `${prediction.decompensationProbability}%` : '--'}
-          subtitle={`Over next ${horizon}`}
-          deltaText={language === 'hi' ? 'उच्च जोखिम प्रक्षेपवक्र' : 'High Risk Trajectory'}
-          deltaSeverity="critical"
-        />
-        <MetricCard
-          title={tf.projectedSeverity}
-          value={prediction ? prediction.projectedRiskScoreMedian : '--'}
-          unit="/ 100"
-          baseline={prediction?.baselineRiskScore}
-          deltaText={prediction ? `+${prediction.projectedRiskScoreMedian - prediction.baselineRiskScore} pts projected` : ''}
-          deltaSeverity="warning"
-        />
-        <MetricCard
-          title={tf.conformalUncertainty}
-          value={prediction ? `±${prediction.conformalUncertaintyPercent}%` : '--'}
-          subtitle="90% Coverage Guarantee"
-          deltaText="Conformal quantile interval"
-          deltaSeverity="normal"
-        />
-        <MetricCard
-          title={tf.interventionWindow}
-          value="4 - 6 Hours"
-          subtitle={language === 'hi' ? 'अपरिवर्तनीय विफलता पूर्व' : 'Before irreversible tubular insult'}
-          deltaText={language === 'hi' ? 'तत्काल हस्तक्षेप खिड़की' : 'Urgent window'}
-          deltaSeverity="warning"
-        />
-      </div>
-
-      {/* Main Trajectory Projection Chart */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div>
-            <h2 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy">
-              {language === 'hi' ? `दीर्घकालिक पूर्वानुमान एवं परिदृश्य अनुकरण (${horizon})` : `Longitudinal Forecast & Scenario Simulation (${horizon} Window)`}
-            </h2>
-            <p className="text-[11px] text-vitalis-muted mt-0.5">
-              {language === 'hi' ? 'विगत १२ घंटों के प्रेक्षण एवं आगामी अनुमानित प्रक्षेपवक्र' : 'Historical telemetry observations (-12h to 0h) combined with illustrative future risk paths'}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-4 text-xs">
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-3 bg-vitalis-navy rounded-sm" />
-              <span className="font-medium text-slate-800">{language === 'hi' ? 'वास्तविक प्रेक्षित' : 'Historical Actual'}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-0.5 bg-vitalis-blue inline-block border-t-2 border-dashed border-vitalis-blue" />
-              <span className="font-medium text-vitalis-blue">{language === 'hi' ? 'अनुमानित माध्यिका' : 'Projected Median'}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-0.5 bg-red-600 inline-block" />
-              <span className="font-medium text-red-600">{language === 'hi' ? 'गंभीरता पथ' : 'Worsening Path'}</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-3 h-0.5 bg-emerald-600 inline-block" />
-              <span className="font-medium text-emerald-600">{language === 'hi' ? 'उपचारित पथ' : 'Mitigated Path'}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="h-72 w-full pt-2">
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartPoints} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#DCE4EF" vertical={false} />
-              <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#64748B' }} stroke="#DCE4EF" />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#64748B' }} stroke="#DCE4EF" />
-              <Tooltip
-                content={({ active, payload, label }) => {
-                  if (active && payload && payload.length) {
-                    return (
-                      <div className="bg-white border border-vitalis-border p-3 rounded shadow-elevated text-xs space-y-1">
-                        <div className="font-semibold text-vitalis-navy border-b border-vitalis-border pb-1">
-                          {language === 'hi' ? 'समय अंतराल:' : 'Offset:'} {label}
-                        </div>
-                        {payload.map((e, idx) => (
-                          e.value !== undefined && (
-                            <div key={idx} className="flex justify-between gap-4 font-mono">
-                              <span style={{ color: e.color }}>{e.name}:</span>
-                              <span className="font-bold">{Array.isArray(e.value) ? `${e.value[0]} - ${e.value[1]}` : e.value}</span>
-                            </div>
-                          )
-                        ))}
-                      </div>
-                    );
-                  }
-                  return null;
-                }}
-              />
-              <ReferenceLine x={language === 'hi' ? 'वर्तमान' : 'Now'} stroke="#123B82" strokeWidth={1.5} label={{ value: language === 'hi' ? 'वर्तमान समय' : 'CURRENT HOUR', fill: '#123B82', fontSize: 10, position: 'top' }} />
-
-              <Area type="monotone" dataKey="uncertaintyRange" name={tf.conformalUncertainty} fill="#2563EB" fillOpacity={0.10} stroke="none" />
-              <Line type="monotone" dataKey="actual" name="Historical Observed" stroke="#123B82" strokeWidth={3} dot={{ r: 3, fill: '#123B82' }} connectNulls={false} />
-              <Line type="monotone" dataKey="median" name="Projected Median" stroke="#2563EB" strokeWidth={2.5} strokeDasharray="5 3" dot={false} connectNulls={false} />
-              <Line type="monotone" dataKey="worsening" name="Worsening Trajectory" stroke="#DC2626" strokeWidth={2} strokeDasharray="2 2" dot={false} connectNulls={false} />
-              <Line type="monotone" dataKey="stable" name="Mitigated Path" stroke="#059669" strokeWidth={2} strokeDasharray="3 3" dot={false} connectNulls={false} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Evidence & Model Limitations Dual Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Primary Risk Drivers */}
-        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-2">
-              <Layers className="w-4 h-4 text-vitalis-navy" />
-              {tf.keyDrivers}
-            </h3>
-            <span className="text-[10px] text-vitalis-muted">Ranked by Model Influence</span>
-          </div>
-
-          <div className="space-y-3">
-            {prediction?.primaryRiskDrivers.map((driver, idx) => {
-              const organColors = {
-                renal: 'text-vitalis-blue border-blue-200 bg-blue-50',
-                cardiac: 'text-red-700 border-red-200 bg-red-50',
-                respiratory: 'text-teal-700 border-teal-200 bg-teal-50',
-                hepatic: 'text-amber-800 border-amber-200 bg-amber-50',
-              };
-
-              return (
-                <div key={idx} className="border border-vitalis-border rounded-md p-3 text-xs space-y-1.5 bg-slate-50/40">
-                  <div className="flex items-center justify-between">
-                    <span className={cn('px-2 py-0.5 rounded font-semibold text-[10px] border uppercase', organColors[driver.organ])}>
-                      {driver.organ} SYSTEM
-                    </span>
-                    <span className="font-mono text-[11px] text-vitalis-muted">
-                      CI: <strong className="text-slate-800">{driver.confidenceInterval}</strong>
-                    </span>
-                  </div>
-                  <div className="font-semibold text-slate-800">
-                    {driver.factor}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="pt-2 border-t border-vitalis-border space-y-1.5">
-            <span className="text-[11px] font-bold text-vitalis-navy uppercase tracking-wider">
-              {language === 'hi' ? 'नैदानिक दिशानिर्देश आधार:' : 'Consensus Diagnostic Criteria Grounding:'}
-            </span>
-            <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-600">
-              {prediction?.clinicalEvidencePoints.map((pt, i) => (
-                <li key={i}>{pt}</li>
+          <div className="relative">
+            <select
+              value={selectedPatientId}
+              onChange={(e) => setSelectedPatientId(e.target.value)}
+              className="appearance-none bg-slate-50 border border-vitalis-border rounded-lg pl-3 pr-8 py-1.5 text-xs font-semibold text-vitalis-navy focus:outline-none focus:border-vitalis-blue cursor-pointer"
+            >
+              {patients.map((pat) => (
+                <option key={pat.id} value={pat.id}>
+                  {pat.id} — {pat.name} ({pat.bed})
+                </option>
               ))}
-            </ul>
-          </div>
-        </div>
-
-        {/* Model Limitations & Regulatory Governance */}
-        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-amber-700" />
-              {tf.algorithmicLimitations}
-            </h3>
-            <span className="text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded font-semibold">
-              AngaSutra Research
-            </span>
+            </select>
+            <ChevronDown className="w-3.5 h-3.5 text-vitalis-muted absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
 
-          <div className="space-y-2 text-xs">
-            <div className="p-3 bg-slate-50 border border-vitalis-border rounded-md space-y-1.5">
-              <span className="font-bold text-slate-800">{language === 'hi' ? 'मान्यता एवं सीमाएं:' : 'Assumptions & Caveats:'}</span>
-              <ul className="list-disc pl-4 space-y-1 text-[11px] text-vitalis-muted">
-                {prediction?.modelLimitations.map((lim, i) => (
-                  <li key={i}>{lim}</li>
-                ))}
-              </ul>
-            </div>
-
-            <div className="p-3 bg-sky-50 border border-sky-100 rounded-md text-[11px] text-sky-950 leading-relaxed space-y-1">
-              <span className="font-bold text-vitalis-navy block">{tf.clinicianInTheLoop}:</span>
-              {language === 'hi'
-                ? 'अङ्गसूत्र प्रक्षेपवक्र नैदानिक शोध एवं दृश्यता हेतु तैयार किए गए हैं। किसी भी स्थिति में एल्गोरिथम अनुमान चिकित्सक के प्रत्यक्ष परीक्षण से ऊपर नहीं हो सकते।'
-                : 'FutureCast trajectories are generated for clinical visualization and interface research only. Under no circumstances should algorithmic predictions override bedside hemodynamic assessment or diagnostic protocols.'}
-            </div>
+          <div className="flex items-center gap-1 bg-slate-50 border border-vitalis-border rounded-lg p-1 text-xs">
+            <Clock className="w-3.5 h-3.5 text-vitalis-muted ml-1" />
+            <select
+              value={currentAnchor?.hour}
+              onChange={(e) => setSelectedAnchorHour(Number(e.target.value))}
+              className="bg-transparent text-vitalis-navy font-mono font-bold focus:outline-none cursor-pointer pr-1"
+            >
+              {anchors.map((anc) => (
+                <option key={anc.hour} value={anc.hour}>
+                  Anchor {anc.hour}h
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
+
+      {/* Insufficient Data State */}
+      {isDataInsufficient ? (
+        <div className="bg-card rounded-lg border border-amber-200 p-8 text-center space-y-3">
+          <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto" />
+          <h3 className="text-base font-bold text-vitalis-text">
+            Not Enough Evidence to Project Forward at Hour {currentAnchor?.hour}h
+          </h3>
+          <p className="text-xs text-vitalis-muted max-w-lg mx-auto">
+            The multi-organ intelligence engine has withheld forward trajectory estimates because required physiological telemetry or personal baseline calibration does not satisfy safety thresholds.
+          </p>
+          <span className="inline-block text-[11px] text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1 rounded">
+            Display rule strictly enforced: No fabricated numbers presented.
+          </span>
+        </div>
+      ) : (
+        /* Trajectory Projections Chart & Scenario Table */
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Main Composed Chart - 2 Cols */}
+          <div className="lg:col-span-2 bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-vitalis-border pb-3">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+                  Modelled Risk Trajectory (+4h, +8h, +12h)
+                </h3>
+                <p className="text-[11px] text-vitalis-muted mt-0.5">
+                  Comparison between current trajectory maintenance vs stabilizing response
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded-full bg-emerald-500" />
+                  <span className="text-slate-700">Stable Scenario</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded-full bg-amber-600" />
+                  <span className="text-slate-700">Trend Continues</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={chartPoints} margin={{ top: 15, right: 20, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#DCE4EF" vertical={false} />
+                  <XAxis dataKey="label" stroke="#64748B" fontSize={11} tickLine={false} />
+                  <YAxis
+                    stroke="#64748B"
+                    fontSize={11}
+                    tickLine={false}
+                    domain={[0, 100]}
+                    tickFormatter={(val) => `${val}%`}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#FFFFFF',
+                      borderColor: '#DCE4EF',
+                      borderRadius: '8px',
+                      fontSize: '11px',
+                    }}
+                    formatter={(val: any, name: string) => [
+                      typeof val === 'number' ? `${val.toFixed(1)}%` : '--',
+                      name,
+                    ]}
+                  />
+
+                  {/* Reference line for current anchor */}
+                  <ReferenceLine
+                    x={`${currentAnchor?.hour}h`}
+                    stroke="#DC2626"
+                    strokeDasharray="3 3"
+                    label={{ value: 'Active Anchor', fill: '#DC2626', fontSize: 10, position: 'top' }}
+                  />
+
+                  {/* Historical observations line */}
+                  <Line
+                    type="monotone"
+                    dataKey="historical"
+                    stroke="#123B82"
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: '#123B82' }}
+                    name="Historical Modelled Risk"
+                    connectNulls
+                  />
+
+                  {/* Stable forward line */}
+                  <Line
+                    type="monotone"
+                    dataKey="stable"
+                    stroke="#0D9488"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
+                    dot={{ r: 4, fill: '#0D9488' }}
+                    name="Stable Scenario"
+                    connectNulls
+                  />
+
+                  {/* Trend continues forward line */}
+                  <Line
+                    type="monotone"
+                    dataKey="trend_continues"
+                    stroke="#D97706"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
+                    dot={{ r: 4, fill: '#D97706' }}
+                    name="Trend Continues Scenario"
+                    connectNulls
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="p-2.5 rounded bg-amber-50/70 border border-amber-200 text-[10px] text-amber-800 leading-relaxed">
+              <strong>Clinical Guardrail:</strong> {RISK_DISCLAIMER_CAPTION}
+            </div>
+          </div>
+
+          {/* Scenario Details & Evidence Panel - 1 Col */}
+          <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
+            <div className="flex items-center gap-2 border-b border-vitalis-border pb-2.5">
+              <Layers className="w-4 h-4 text-vitalis-navy" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+                Horizon Estimates
+              </h3>
+            </div>
+
+            {/* Scenario Table */}
+            <div className="space-y-2 text-xs">
+              {(typeof fcEntry === 'object' && fcEntry !== null && fcEntry.stable
+                ? fcEntry.stable
+                : []
+              ).map((sPoint, idx) => {
+                const tPoint = (fcEntry as any).trend_continues?.[idx];
+                const offsetH = sPoint.hour - (currentAnchor?.hour ?? 0);
+                return (
+                  <div
+                    key={sPoint.hour}
+                    className="p-3 rounded-lg border border-vitalis-border bg-slate-50 space-y-2"
+                  >
+                    <div className="flex items-center justify-between font-bold text-vitalis-navy">
+                      <span>Horizon: +{offsetH} hours</span>
+                      <span className="font-mono text-slate-500 font-normal">
+                        ICU Hour {sPoint.hour}h
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="bg-emerald-50/80 border border-emerald-200 rounded p-1.5 text-emerald-900">
+                        <span className="block text-[10px] text-emerald-700">Stable Scenario</span>
+                        <span className="font-mono font-bold text-xs">
+                          {formatRiskPercent(sPoint.risk_overall)}
+                        </span>
+                      </div>
+                      <div className="bg-amber-50/80 border border-amber-200 rounded p-1.5 text-amber-900">
+                        <span className="block text-[10px] text-amber-700">Trend Continues</span>
+                        <span className="font-mono font-bold text-xs">
+                          {formatRiskPercent(tPoint?.risk_overall)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Evidence Summary from Current Anchor */}
+            <div className="space-y-2 pt-2 border-t border-vitalis-border">
+              <span className="text-[10px] font-bold text-vitalis-navy uppercase tracking-wider block">
+                Primary Model Drivers:
+              </span>
+              <div className="space-y-1.5 text-[11px]">
+                {(currentAnchor?.reasons || []).slice(0, 3).map((r, i) => (
+                  <div key={i} className="p-2 rounded bg-slate-50 border border-slate-200 text-slate-700">
+                    <span className="font-semibold block font-mono text-[10px] text-vitalis-navy">
+                      {r.feature}
+                    </span>
+                    <span>{r.text}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

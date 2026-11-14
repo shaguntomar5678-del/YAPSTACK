@@ -1,268 +1,355 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import {
   ShieldCheck,
   AlertTriangle,
   Clock,
   Activity,
   Server,
+  CheckCircle2,
+  XCircle,
+  Database,
+  ChevronDown,
 } from 'lucide-react';
 import { useApp } from '../../../context/AppContext';
-import { dataTrustService } from '../../../services/dataTrustService';
-import { DataQualityAudit } from '../../../types/dataTrust';
+import { usePatient } from '../../../lib/hooks';
 import { Badge } from '../../common/Badge';
-import { MetricCard } from '../../common/MetricCard';
 import { cn } from '../../../utils/cn';
+import { RISK_DISCLAIMER_CAPTION } from '../../../utils/formatters';
 
 export const DataTrust: React.FC = () => {
-  const { selectedPatient, patients, setSelectedPatientId, language, t } = useApp();
-  const [audit, setAudit] = useState<DataQualityAudit | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const {
+    selectedPatientId,
+    setSelectedPatientId,
+    selectedAnchorHour,
+    setSelectedAnchorHour,
+    patients,
+    language,
+    t,
+  } = useApp();
 
-  useEffect(() => {
-    if (selectedPatient) {
-      setLoading(true);
-      dataTrustService.getAuditForPatient(selectedPatient.id).then((res) => {
-        setAudit(res);
-        setLoading(false);
+  const { data: patient, loading, error } = usePatient(selectedPatientId);
+
+  const patientSummary = useMemo(() => {
+    return patients?.find((p) => p.id === selectedPatientId);
+  }, [patients, selectedPatientId]);
+
+  const anchors = useMemo(() => patient?.anchors ?? [], [patient]);
+
+  const currentAnchor = useMemo(() => {
+    if (!anchors.length) return null;
+    const found = anchors.find((a) => a.hour === selectedAnchorHour);
+    return found || anchors[anchors.length - 1];
+  }, [anchors, selectedAnchorHour]);
+
+  const trust = currentAnchor?.trust;
+
+  // Compute parameter availability within ±8 hours of active anchor
+  const parameterAvailability = useMemo(() => {
+    if (!patient?.series) return [];
+    const anchorH = currentAnchor?.hour ?? 92;
+
+    return Object.entries(patient.series).map(([key, pts]) => {
+      // Find closest point to anchorH
+      let closestDist = Infinity;
+      let closestHour = -1;
+      let hasRecent = false;
+
+      pts.forEach(([h, val]) => {
+        if (val !== null) {
+          const dist = Math.abs(h - anchorH);
+          if (dist <= 8) {
+            hasRecent = true;
+          }
+          if (dist < closestDist) {
+            closestDist = dist;
+            closestHour = h;
+          }
+        }
       });
-    }
-  }, [selectedPatient]);
 
-  if (!selectedPatient) return null;
+      return {
+        parameter: key,
+        available: hasRecent,
+        lastObservedHour: closestHour >= 0 ? closestHour : null,
+        distanceFromAnchor: closestHour >= 0 ? closestDist : null,
+        totalMeasurements: pts.length,
+      };
+    });
+  }, [patient?.series, currentAnchor?.hour]);
+
+  const getTrustBadgeVariant = (level?: string): 'teal' | 'navy' | 'warning' | 'critical' => {
+    switch (level) {
+      case 'high':
+        return 'teal';
+      case 'moderate':
+      case 'medium':
+        return 'navy';
+      case 'low':
+        return 'warning';
+      case 'insufficient':
+      default:
+        return 'critical';
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        Loading data quality audit...
+      </div>
+    );
+  }
+
+  if (error || !patient) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        <p className="text-vitalis-critical">
+          {error || 'Patient data quality record could not be loaded.'}
+        </p>
+      </div>
+    );
+  }
 
   const td = t.dataTrust;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      {/* Header & Selectors */}
+      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-vitalis-navy flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-vitalis-teal" />
-              {td.title}
+              <span>{td.title}</span>
             </h1>
-            <Badge variant="teal" size="xs">
-              {language === 'hi' ? 'गुणवत्ता आश्वासन' : 'Quality Assurance'}
+            <Badge variant={getTrustBadgeVariant(trust?.level)} size="xs" className="capitalize">
+              Trust Level: {trust?.level ?? 'Unknown'}
             </Badge>
           </div>
           <p className="text-xs text-vitalis-muted mt-0.5">
-            {td.subtitle} • {selectedPatient.name} ({selectedPatient.bed})
+            {td.subtitle} • {patientSummary?.name ?? patient.id} ({patientSummary?.bed ?? 'ICU'})
           </p>
         </div>
 
-        {/* Patient Selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-vitalis-muted font-medium">{language === 'hi' ? 'रोगी:' : 'Patient:'}</span>
-          <select
-            value={selectedPatient.id}
-            onChange={(e) => setSelectedPatientId(e.target.value)}
-            className="bg-background border border-vitalis-border rounded-md px-2.5 py-1 text-xs text-vitalis-text focus:outline-none focus:border-vitalis-blue"
-          >
-            {patients.map((pt) => (
-              <option key={pt.id} value={pt.id}>
-                {pt.name} ({pt.bed})
-              </option>
-            ))}
-          </select>
+        {/* Patient & Anchor Selectors */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Patient Selector */}
+          <div className="relative">
+            <select
+              value={selectedPatientId}
+              onChange={(e) => setSelectedPatientId(e.target.value)}
+              className="appearance-none bg-slate-50 border border-vitalis-border rounded-lg pl-3 pr-8 py-1.5 text-xs font-semibold text-vitalis-navy focus:outline-none focus:border-vitalis-blue cursor-pointer"
+            >
+              {patients.map((pat) => (
+                <option key={pat.id} value={pat.id}>
+                  {pat.id} — {pat.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="w-3.5 h-3.5 text-vitalis-muted absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
+
+          {/* Anchor Selector */}
+          <div className="flex items-center gap-1 bg-slate-50 border border-vitalis-border rounded-lg p-1 text-xs">
+            <Clock className="w-3.5 h-3.5 text-vitalis-muted ml-1" />
+            <select
+              value={currentAnchor?.hour}
+              onChange={(e) => setSelectedAnchorHour(Number(e.target.value))}
+              className="bg-transparent text-vitalis-navy font-mono font-bold focus:outline-none cursor-pointer pr-1"
+            >
+              {anchors.map((anc) => (
+                <option key={anc.hour} value={anc.hour}>
+                  Hour {anc.hour}h
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
-      {/* Top 4 Trust KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard
-          title={td.overallTrust}
-          value={audit ? `${audit.overallTrustScore}%` : '--'}
-          subtitle={language === 'hi' ? 'मानकीकृत समग्र स्कोर' : 'Enterprise calibrated composite'}
-          deltaText={language === 'hi' ? 'उच्च गुणवत्ता श्रेणी' : 'High Data Quality Tier'}
-          deltaSeverity="normal"
-        />
-        <MetricCard
-          title={td.completenessRate}
-          value={audit ? `${audit.completenessScore}%` : '--'}
-          subtitle={language === 'hi' ? 'निरंतर एवं आवधिक डेटा' : 'Across continuous & intermittent feeds'}
-          deltaText={language === 'hi' ? 'न्यूनतम टेलीमेट्री अंतराल' : 'Minimal telemetry drops'}
-          deltaSeverity="normal"
-        />
-        <MetricCard
-          title={td.consistency}
-          value={audit ? `${audit.consistencyScore}%` : '--'}
-          subtitle={language === 'hi' ? 'सेंसर विचलन एवं शोर' : 'Artifact & noise detection'}
-          deltaText={language === 'hi' ? 'स्थिर ट्रांसड्यूसर सिग्नल' : 'Stable transducer signals'}
-          deltaSeverity="normal"
-        />
-        <MetricCard
-          title={td.baselineIntegrity}
-          value={audit ? `${audit.baselineIntegrityScore}%` : '--'}
-          subtitle={language === 'hi' ? 'प्रवेश पूर्व एवं भर्ती सत्यापित' : 'Pre-admission & admission validated'}
-          deltaText={language === 'hi' ? 'पूर्ण आधारभूत प्रोफ़ाइल' : 'Full baseline profile available'}
-          deltaSeverity="normal"
-        />
-      </div>
-
-      {/* Quality Flags & Alert Notifications */}
-      {audit && audit.activeQualityFlags.length > 0 && (
-        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3 border-l-4 border-l-vitalis-warning">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-vitalis-warning" />
-              {td.qualityFlags} ({audit.activeQualityFlags.length})
-            </h3>
-            <span className="text-[10px] text-amber-800 bg-amber-50 px-2 py-0.5 rounded font-semibold border border-amber-200">
-              {td.attentionRecommended}
-            </span>
+      {/* KPI Cards: Completeness, Consistency, Baseline Availability */}
+      {trust && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* Completeness */}
+          <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-2">
+            <div className="flex items-center justify-between text-xs text-vitalis-muted uppercase tracking-wider font-semibold">
+              <span>{td.completenessRate}</span>
+              <Database className="w-4 h-4 text-vitalis-teal" />
+            </div>
+            <div className="text-2xl font-bold font-mono text-vitalis-text">
+              {(trust.completeness * 100).toFixed(0)}%
+            </div>
+            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+              <div
+                className="bg-vitalis-teal h-full rounded-full"
+                style={{ width: `${Math.min(100, trust.completeness * 100)}%` }}
+              />
+            </div>
+            <p className="text-[10px] text-vitalis-muted">
+              Telemetry capture rate within sampling window
+            </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {audit.activeQualityFlags.map((flag) => (
-              <div key={flag.id} className="bg-slate-50 border border-vitalis-border rounded-md p-3 text-xs space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-800">{flag.title}</span>
-                  <Badge variant="warning" size="xs">
-                    {flag.level.toUpperCase()}
-                  </Badge>
-                </div>
-                <p className="text-[11px] text-slate-600 leading-relaxed">
-                  {flag.description}
-                </p>
-                <div className="text-[10px] text-vitalis-blue font-semibold pt-1 border-t border-vitalis-border/60">
-                  {language === 'hi' ? 'अनुशंसित कार्यवाही:' : 'Recommended Action:'} {flag.suggestedVerification}
-                </div>
-              </div>
-            ))}
+          {/* Consistency */}
+          <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-2">
+            <div className="flex items-center justify-between text-xs text-vitalis-muted uppercase tracking-wider font-semibold">
+              <span>{td.consistency}</span>
+              <Activity className="w-4 h-4 text-vitalis-blue" />
+            </div>
+            <div className="text-2xl font-bold font-mono text-vitalis-text">
+              {(trust.consistency * 100).toFixed(0)}%
+            </div>
+            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+              <div
+                className="bg-vitalis-blue h-full rounded-full"
+                style={{ width: `${Math.min(100, trust.consistency * 100)}%` }}
+              />
+            </div>
+            <p className="text-[10px] text-vitalis-muted">
+              Sensor stability and cross-parameter agreement
+            </p>
+          </div>
+
+          {/* Baseline Availability */}
+          <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-2">
+            <div className="flex items-center justify-between text-xs text-vitalis-muted uppercase tracking-wider font-semibold">
+              <span>{td.baselineIntegrity}</span>
+              <Server className="w-4 h-4 text-vitalis-navy" />
+            </div>
+            <div className="text-2xl font-bold font-mono text-vitalis-text">
+              {typeof trust.baseline_availability === 'number'
+                ? `${(trust.baseline_availability * 100).toFixed(0)}%`
+                : trust.baseline_availability ? '100%' : '0%'}
+            </div>
+            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+              <div
+                className="bg-vitalis-navy h-full rounded-full"
+                style={{
+                  width: `${
+                    typeof trust.baseline_availability === 'number'
+                      ? Math.min(100, trust.baseline_availability * 100)
+                      : trust.baseline_availability ? 100 : 0
+                  }%`,
+                }}
+              />
+            </div>
+            <p className="text-[10px] text-vitalis-muted">
+              Historical baseline coverage available for deviation calculations
+            </p>
           </div>
         </div>
       )}
 
-      {/* Telemetry Ingestion Streams Table */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-2">
-            <Server className="w-4 h-4 text-vitalis-navy" />
-            {td.connectedStreams}
-          </h3>
-          <span className="text-xs text-vitalis-muted">HL7 / FHIR / Continuous Telemetry Pipeline</span>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead>
-              <tr className="border-b border-vitalis-border text-vitalis-muted uppercase tracking-wider text-[10px] bg-slate-50/60">
-                <th className="py-2.5 px-3">{language === 'hi' ? 'डेटा स्रोत' : 'Modality / Ingestion Feed'}</th>
-                <th className="py-2.5 px-3">{language === 'hi' ? 'हार्डवेयर / प्रणाली' : 'Source Hardware / LIS'}</th>
-                <th className="py-2.5 px-3">{language === 'hi' ? 'आवृत्ति' : 'Sampling Cadence'}</th>
-                <th className="py-2.5 px-3">{language === 'hi' ? 'पूर्णता' : 'Completeness'}</th>
-                <th className="py-2.5 px-3">{language === 'hi' ? 'विलंबता' : 'Ingest Latency'}</th>
-                <th className="py-2.5 px-3">{language === 'hi' ? 'शोर/आर्टिफैक्ट्स' : 'Artifacts (24h)'}</th>
-                <th className="py-2.5 px-3 text-right">{language === 'hi' ? 'स्थिति' : 'Stream Status'}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-vitalis-border/60">
-              {audit?.modalities.map((m, idx) => (
-                <tr key={idx} className="hover:bg-slate-50/50">
-                  <td className="py-2.5 px-3 font-semibold text-vitalis-navy">{m.name}</td>
-                  <td className="py-2.5 px-3 text-vitalis-muted font-mono">{m.sourceSystem}</td>
-                  <td className="py-2.5 px-3 text-slate-700">{m.samplingFrequency}</td>
-                  <td className="py-2.5 px-3 font-mono font-bold text-slate-800">{m.completenessRate}%</td>
-                  <td className="py-2.5 px-3 font-mono text-slate-700">{m.latencySeconds}s</td>
-                  <td className="py-2.5 px-3 font-mono text-slate-700">{m.artifactsCount24h}</td>
-                  <td className="py-2.5 px-3 text-right">
-                    <Badge
-                      variant={m.status === 'Optimal' ? 'stable' : m.status === 'Delayed' ? 'warning' : 'critical'}
-                      size="xs"
-                      dot
-                    >
-                      {m.status}
-                    </Badge>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Missing Measurements Tracker & 24h Availability Matrix Dual Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Missing Measurements Tracker */}
-        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-2">
-              <Clock className="w-4 h-4 text-vitalis-blue" />
-              {td.missingTracker}
+      {/* Audit Notifications & Series Availability Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left: Audit Reasons / Notifications (1 Col) */}
+        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
+          <div className="flex items-center gap-2 border-b border-vitalis-border pb-2.5">
+            <AlertTriangle className="w-4 h-4 text-vitalis-warning" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+              Quality Audit Findings
             </h3>
-            <span className="text-[10px] text-vitalis-muted">Expected Frequency Surveillance</span>
           </div>
 
-          <div className="space-y-2.5">
-            {audit?.missingMeasurements.map((item, idx) => (
-              <div key={idx} className="border border-vitalis-border rounded-md p-3 text-xs space-y-1.5 bg-slate-50/50">
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-slate-900">{item.testOrVital}</span>
-                  <Badge variant={item.clinicalImpactTier === 'High' ? 'critical' : 'warning'} size="xs">
-                    {item.clinicalImpactTier} Impact
-                  </Badge>
+          <div className="space-y-2.5 text-xs">
+            {trust?.reasons && trust.reasons.length > 0 ? (
+              trust.reasons.map((reason, idx) => (
+                <div
+                  key={idx}
+                  className="p-3 rounded-lg border border-amber-200 bg-amber-50/70 text-amber-900 space-y-1"
+                >
+                  <div className="font-semibold flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                    <span>Telemetry Flag #{idx + 1}</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-snug">
+                    {reason}
+                  </p>
                 </div>
-                <div className="flex justify-between items-center text-[11px] text-vitalis-muted">
-                  <span>Category: <strong className="text-slate-700">{item.category}</strong></span>
-                  <span>{language === 'hi' ? 'अंतिम परीक्षण:' : 'Last drawn:'} <strong className="font-mono text-slate-700">{item.hoursSinceLastMeasurement}h ago</strong> (Expected q{item.expectedFrequencyHours}h)</span>
+              ))
+            ) : (
+              <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-center space-y-1">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 mx-auto" />
+                <div className="font-semibold text-xs">
+                  Optimal Telemetry Quality
                 </div>
-              </div>
-            ))}
-
-            {(!audit || audit.missingMeasurements.length === 0) && (
-              <div className="py-8 text-center text-xs text-vitalis-muted">
-                {language === 'hi' ? 'कोई छूटा हुआ परीक्षण नहीं मिला।' : 'No overdue measurements detected. All protocolized lab draws are current.'}
+                <p className="text-[11px] text-emerald-700">
+                  No missing measurements, sensor dropouts, or calibration flags reported at anchor {currentAnchor?.hour}h.
+                </p>
               </div>
             )}
           </div>
+
+          {/* Model Safety Notice */}
+          <div className="p-3 rounded-lg bg-slate-50 border border-vitalis-border text-[10px] text-vitalis-muted leading-relaxed">
+            <strong>Data Integrity Policy:</strong> When data quality is insufficient, downstream predictive models automatically withhold numeric risk estimates and display &ldquo;Insufficient data&rdquo;.
+          </div>
         </div>
 
-        {/* 24-Hour Telemetry Availability Timeline Matrix */}
-        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-2">
-              <Activity className="w-4 h-4 text-vitalis-teal" />
-              {td.continuityMatrix}
-            </h3>
-            <span className="text-[10px] text-vitalis-muted">Continuous (60s bins)</span>
-          </div>
-
-          <p className="text-[11px] text-vitalis-muted">
-            {language === 'hi'
-              ? 'विगत २४ घंटों में प्रति घंटा डेटा घनत्व। हरे ब्लॉक निर्बाध निरंतर टेलीमेट्री दर्शाते हैं।'
-              : 'Sampling density per hour over the previous 24-hour cycle. Green blocks indicate uninterrupted continuous telemetry ingestion.'}
-          </p>
-
-          <div className="grid grid-cols-12 gap-1.5 pt-2">
-            {audit?.timeline24h.map((t, idx) => (
-              <div
-                key={idx}
-                className={cn(
-                  'h-12 rounded border flex flex-col items-center justify-center text-[9px] font-mono transition-all',
-                  t.gapsDetected
-                    ? 'bg-amber-100 border-amber-300 text-amber-900 font-bold'
-                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                )}
-                title={`Hour ${t.hour}: ${t.vitalsRecorded} vitals recorded, ${t.labsRecorded} labs. ${t.gapsDetected ? 'Intermittent sampling gap flagged.' : 'Nominal continuity.'}`}
-              >
-                <span>{t.hour.split(':')[0]}h</span>
-                <span className="text-[8px] opacity-75">{t.gapsDetected ? 'GAP' : '100%'}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex items-center justify-between text-[10px] text-vitalis-muted pt-2 border-t border-vitalis-border">
-            <span>{language === 'hi' ? '२४ घंटे पूर्व' : '24 Hours Ago'}</span>
-            <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 bg-emerald-100 border border-emerald-300 rounded-sm" /> 100% Continuous
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 bg-amber-100 border border-amber-300 rounded-sm" /> Sampling Gap
-              </span>
+        {/* Right: Parameter Telemetry Availability Grid (2 Cols) */}
+        <div className="lg:col-span-2 bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
+          <div className="flex items-center justify-between border-b border-vitalis-border pb-2.5">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+                Continuous Telemetry &amp; Lab Sampling Window
+              </h3>
+              <p className="text-[11px] text-vitalis-muted mt-0.5">
+                Evaluation window: ±8 hours from active anchor ({currentAnchor?.hour}h)
+              </p>
             </div>
-            <span>{language === 'hi' ? 'वर्तमान घंटा' : 'Current Hour'}</span>
+            <span className="text-[11px] font-mono text-vitalis-navy font-semibold">
+              {parameterAvailability.filter((p) => p.available).length} / {parameterAvailability.length} Active
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-vitalis-border bg-slate-50/80 text-[11px] font-semibold text-vitalis-muted uppercase tracking-wider">
+                  <th className="py-2.5 px-3">Parameter</th>
+                  <th className="py-2.5 px-3">Window Status (±8h)</th>
+                  <th className="py-2.5 px-3">Closest Observation</th>
+                  <th className="py-2.5 px-3">Total Series Samples</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-vitalis-border">
+                {parameterAvailability.map((row) => (
+                  <tr key={row.parameter} className="hover:bg-slate-50/60 transition-colors">
+                    <td className="py-2.5 px-3 font-semibold text-vitalis-text">
+                      {row.parameter}
+                    </td>
+                    <td className="py-2.5 px-3">
+                      {row.available ? (
+                        <span className="inline-flex items-center gap-1.5 text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded text-[11px] font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Within Window
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded text-[11px] font-medium">
+                          <XCircle className="w-3.5 h-3.5 text-amber-600" />
+                          Missing in Window
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700">
+                      {row.lastObservedHour !== null ? (
+                        <span>
+                          {row.lastObservedHour}h{' '}
+                          <span className="text-vitalis-muted">
+                            ({row.distanceFromAnchor}h from anchor)
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 font-mono text-[11px] text-slate-700">
+                      {row.totalMeasurements}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>

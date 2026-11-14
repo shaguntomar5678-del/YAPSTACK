@@ -18,78 +18,86 @@ import {
   Info,
   Clock,
   RotateCcw,
-  SkipForward,
   CheckCircle2,
   ShieldAlert,
+  ChevronDown,
+  Layers,
+  Droplets,
+  Heart,
+  Wind,
+  Activity,
 } from 'lucide-react';
 import { useApp } from '../../../context/AppContext';
-import { MOCK_CASCADE_DATA } from '../../../services/mockData';
-import { CascadeNodeData, CascadeEdgeData } from '../../../types/cascade';
+import { usePatient } from '../../../lib/hooks';
 import { Badge } from '../../common/Badge';
 import { cn } from '../../../utils/cn';
+import { formatRiskPercent } from '../../../utils/formatters';
 
-// Custom React Flow Node Component
-const ClinicalNodeComponent: React.FC<{ data: CascadeNodeData; selected: boolean }> = ({ data, selected }) => {
-  const categoryStyles = {
-    cardiac: 'border-l-4 border-l-red-500',
-    renal: 'border-l-4 border-l-blue-600',
-    fluid: 'border-l-4 border-l-indigo-600',
-    respiratory: 'border-l-4 border-l-teal-600',
-    hepatic: 'border-l-4 border-l-amber-500',
-    systemic: 'border-l-4 border-l-slate-600',
+interface CustomNodeData {
+  id: string;
+  label: string;
+  organKey: 'renal' | 'hepatic' | 'cardio' | 'resp';
+  status: string;
+  risk: number | null | undefined;
+  eventHour?: number;
+  isDeteriorated?: boolean;
+}
+
+// Custom ReactFlow Node for Clinically Audited Organ
+const OrganNodeComponent: React.FC<{ data: CustomNodeData; selected: boolean }> = ({ data, selected }) => {
+  const organIcons = {
+    renal: <Droplets className="w-4 h-4 text-vitalis-blue" />,
+    hepatic: <Activity className="w-4 h-4 text-amber-600" />,
+    cardio: <Heart className="w-4 h-4 text-vitalis-critical" />,
+    resp: <Wind className="w-4 h-4 text-vitalis-teal" />,
   };
 
-  const statusBadges = {
-    critical: 'bg-red-50 text-red-700 border-red-200',
-    warning: 'bg-amber-50 text-amber-800 border-amber-200',
-    watch: 'bg-yellow-50 text-yellow-800 border-yellow-200',
-    normal: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+  const statusBadge = (status: string) => {
+    switch (status) {
+      case 'elevated':
+        return <span className="bg-red-100 text-red-800 text-[10px] font-bold px-1.5 py-0.5 rounded">Elevated</span>;
+      case 'dysfunction_present':
+        return <span className="bg-slate-800 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">Dysfunction</span>;
+      case 'low':
+        return <span className="bg-emerald-100 text-emerald-800 text-[10px] font-medium px-1.5 py-0.5 rounded">Low Risk</span>;
+      case 'insufficient_data':
+      default:
+        return <span className="bg-slate-100 text-slate-600 text-[10px] px-1.5 py-0.5 rounded">Insufficient</span>;
+    }
   };
 
   return (
     <div
       className={cn(
-        'w-64 bg-white rounded-lg border border-vitalis-border shadow-card p-3 transition-all select-none',
-        categoryStyles[data.category],
+        'w-56 bg-white rounded-lg border shadow-card p-3 transition-all select-none',
+        data.status === 'elevated' || data.status === 'dysfunction_present'
+          ? 'border-vitalis-critical ring-1 ring-vitalis-critical/20'
+          : 'border-vitalis-border',
         selected ? 'ring-2 ring-vitalis-blue shadow-elevated border-vitalis-blue' : 'hover:border-vitalis-blue/60'
       )}
     >
       <Handle type="target" position={Position.Left} className="w-2.5 h-2.5 !bg-vitalis-navy" />
       <Handle type="source" position={Position.Right} className="w-2.5 h-2.5 !bg-vitalis-navy" />
 
-      <div className="flex items-center justify-between text-[10px] mb-1">
-        <span className="font-mono font-bold text-vitalis-navy uppercase tracking-wider">
-          {data.relativeTime}
-        </span>
-        <span className={cn('px-1.5 py-0.2 rounded font-semibold border text-[9px] uppercase', statusBadges[data.status])}>
-          {data.status}
-        </span>
-      </div>
-
-      <div className="font-bold text-xs text-vitalis-navy leading-snug">
-        {data.label}
-      </div>
-
-      {data.sublabel && (
-        <div className="text-[10px] text-vitalis-muted mt-0.5 truncate">
-          {data.sublabel}
+      <div className="flex items-center justify-between text-[10px] mb-1.5">
+        <div className="flex items-center gap-1.5">
+          {organIcons[data.organKey]}
+          <span className="font-bold text-xs text-vitalis-text">{data.label}</span>
         </div>
-      )}
+        {statusBadge(data.status)}
+      </div>
 
-      {/* Primary Key Metric Display */}
-      <div className="mt-2 pt-1.5 border-t border-vitalis-border/60 flex items-center justify-between text-[11px]">
-        <span className="text-vitalis-muted">{data.primaryMetric.name}:</span>
-        <span className="font-mono font-bold text-slate-900">
-          {data.primaryMetric.value}{' '}
-          <span className="text-[10px] text-red-600 font-semibold font-sans">
-            ({data.primaryMetric.deltaVsBaseline})
-          </span>
+      <div className="flex items-baseline justify-between pt-1 border-t border-slate-100 text-xs">
+        <span className="text-vitalis-muted text-[11px]">Modelled Risk:</span>
+        <span className="font-mono font-bold text-vitalis-navy">
+          {formatRiskPercent(data.risk)}
         </span>
       </div>
 
-      {data.isTriggerNode && (
-        <div className="mt-1.5 text-[9px] font-semibold text-sky-800 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200 text-center uppercase tracking-wider">
-          Primary Distributive Trigger
+      {data.eventHour !== undefined && (
+        <div className="mt-1.5 bg-amber-50 border border-amber-200/80 rounded px-1.5 py-0.5 text-[10px] text-amber-900 font-semibold flex items-center justify-between">
+          <span>Observed Divergence:</span>
+          <span className="font-mono">@{data.eventHour}h</span>
         </div>
       )}
     </div>
@@ -97,322 +105,349 @@ const ClinicalNodeComponent: React.FC<{ data: CascadeNodeData; selected: boolean
 };
 
 const nodeTypes = {
-  clinicalNode: ClinicalNodeComponent,
+  organNode: OrganNodeComponent,
 };
 
 export const CascadeGraph: React.FC = () => {
-  const { selectedPatient, language, t } = useApp();
+  const {
+    selectedPatientId,
+    setSelectedPatientId,
+    selectedAnchorHour,
+    setSelectedAnchorHour,
+    patients,
+    language,
+    t,
+  } = useApp();
 
-  const [nodes, setNodes] = useState<Node[]>(MOCK_CASCADE_DATA.nodes as any);
-  const [edges, setEdges] = useState<Edge[]>(
-    MOCK_CASCADE_DATA.edges.map((e) => ({
-      ...e,
-      type: 'smoothstep',
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: e.data.isClinicallyReviewed ? '#123B82' : '#64748B',
-        width: 16,
-        height: 16,
-      },
-      style: {
-        stroke: e.data.isClinicallyReviewed ? '#123B82' : '#94A3B8',
-        strokeWidth: e.data.isClinicallyReviewed ? 2.5 : 1.8,
-        strokeDasharray: e.data.isClinicallyReviewed ? undefined : '5 5',
-      },
-    }))
-  );
+  const { data: patient, loading, error } = usePatient(selectedPatientId);
 
-  const [selectedNodeData, setSelectedNodeData] = useState<CascadeNodeData | null>(MOCK_CASCADE_DATA.nodes[0].data);
-  const [selectedEdgeData, setSelectedEdgeData] = useState<CascadeEdgeData | null>(null);
+  const [selectedElement, setSelectedElement] = useState<{
+    type: 'node' | 'edge';
+    data: any;
+  } | null>(null);
 
-  // Timeline Slider State (Step 1 to 5)
-  const [currentStepIndex, setCurrentStepIndex] = useState<number>(4);
-  const timelineSteps = MOCK_CASCADE_DATA.timelineSteps;
-  const activeStep = timelineSteps[currentStepIndex];
+  const anchors = useMemo(() => patient?.anchors ?? [], [patient]);
 
-  const onNodesChange = useCallback(
-    (changes: NodeChange[]) => setNodes((nds) => applyNodeChanges(changes, nds)),
-    []
-  );
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange[]) => setEdges((eds) => applyEdgeChanges(changes, eds)),
-    []
-  );
+  const currentAnchor = useMemo(() => {
+    if (!anchors.length) return null;
+    const found = anchors.find((a) => a.hour === selectedAnchorHour);
+    return found || anchors[anchors.length - 1];
+  }, [anchors, selectedAnchorHour]);
 
-  const onNodeClick = (_: React.MouseEvent, node: Node) => {
-    setSelectedNodeData(node.data as CascadeNodeData);
-    setSelectedEdgeData(null);
-  };
+  // Construct ReactFlow Nodes
+  const nodes: Node<CustomNodeData>[] = useMemo(() => {
+    if (!patient || !currentAnchor) return [];
 
-  const onEdgeClick = (_: React.MouseEvent, edge: Edge) => {
-    setSelectedEdgeData(edge.data as CascadeEdgeData);
-    setSelectedNodeData(null);
-  };
+    const organPositions: Record<'renal' | 'cardio' | 'resp' | 'hepatic', { x: number; y: number; label: string }> = {
+      renal: { x: 50, y: 150, label: 'Renal System' },
+      cardio: { x: 350, y: 60, label: 'Cardiovascular' },
+      resp: { x: 650, y: 150, label: 'Respiratory System' },
+      hepatic: { x: 350, y: 280, label: 'Hepatic System' },
+    };
 
-  const styledNodes = useMemo(() => {
-    return nodes.map((node) => {
-      const isActive = activeStep.activeNodeIds.includes(node.id);
+    // Events map
+    const eventMap: Record<string, number> = {};
+    (patient.cascade?.events || []).forEach((ev) => {
+      eventMap[ev.organ] = ev.hour;
+    });
+
+    return (['renal', 'cardio', 'resp', 'hepatic'] as const).map((key) => {
+      const organData = currentAnchor.organs[key];
+      const pos = organPositions[key];
+      const evHour = eventMap[key];
+
       return {
-        ...node,
-        style: {
-          opacity: isActive ? 1 : 0.35,
-          transition: 'opacity 0.25s ease',
+        id: key,
+        type: 'organNode',
+        position: { x: pos.x, y: pos.y },
+        data: {
+          id: key,
+          label: pos.label,
+          organKey: key,
+          status: organData?.status ?? 'low',
+          risk: organData?.risk,
+          eventHour: evHour,
+          isDeteriorated: organData?.status === 'elevated' || organData?.status === 'dysfunction_present',
         },
       };
     });
-  }, [nodes, activeStep]);
+  }, [patient, currentAnchor]);
 
-  const styledEdges = useMemo(() => {
-    return edges.map((edge) => {
-      const isActive = activeStep.activeEdgeIds.includes(edge.id);
-      return {
-        ...edge,
-        animated: isActive,
-        style: {
-          ...edge.style,
-          opacity: isActive ? 1 : 0.2,
-          transition: 'opacity 0.25s ease',
-        },
-      };
-    });
-  }, [edges, activeStep]);
+  // Construct ReactFlow Edges
+  const edges: Edge[] = useMemo(() => {
+    if (!patient?.cascade?.edges) return [];
+    const currentH = currentAnchor?.hour ?? 92;
 
-  const tc = t.cascade;
+    return patient.cascade.edges
+      .filter((e) => {
+        // Show if active_from_hour is undefined or <= selectedAnchorHour
+        return e.active_from_hour === null || e.active_from_hour === undefined || e.active_from_hour <= currentH;
+      })
+      .map((e, idx) => {
+        const isObserved = e.type === 'observed_sequence_and_plausible';
+        return {
+          id: `edge-${idx}-${e.source}-${e.target}`,
+          source: e.source,
+          target: e.target,
+          type: 'default',
+          animated: isObserved,
+          style: {
+            stroke: isObserved ? '#2563EB' : '#94A3B8',
+            strokeWidth: isObserved ? 2.5 : 1.5,
+            strokeDasharray: isObserved ? undefined : '5,5',
+          },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: isObserved ? '#2563EB' : '#94A3B8',
+            width: 16,
+            height: 16,
+          },
+          data: {
+            ...e,
+            classificationText: isObserved
+              ? 'Observed temporal sequence (plausible link)'
+              : 'Clinically plausible pathway',
+          },
+        };
+      });
+  }, [patient?.cascade?.edges, currentAnchor?.hour]);
+
+  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
+    setSelectedElement({ type: 'node', data: node.data });
+  }, []);
+
+  const onEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
+    setSelectedElement({ type: 'edge', data: edge.data });
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        Loading multi-organ cascade dynamics...
+      </div>
+    );
+  }
+
+  if (error || !patient) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        <p className="text-vitalis-critical">
+          {error || 'Cascade dynamics data could not be loaded.'}
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      {/* Top Header */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+    <div className="space-y-6">
+      {/* Header & Controls */}
+      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold tracking-tight text-vitalis-navy">
-              {tc.title}
+            <h1 className="text-xl font-bold tracking-tight text-vitalis-navy flex items-center gap-2">
+              <Network className="w-5 h-5 text-vitalis-blue" />
+              <span>{language === 'hi' ? 'सोपान आरेख (कैस्केड ग्राफ)' : 'Multi-Organ Cascade Dynamics'}</span>
             </h1>
             <Badge variant="navy" size="xs">
-              {language === 'hi' ? 'सोपान आरेख' : 'Pathophysiological Graph'}
+              Non-Causal Association Model
             </Badge>
           </div>
           <p className="text-xs text-vitalis-muted mt-0.5">
-            {language === 'hi'
-              ? `${selectedPatient?.name || 'Sunita Sharma'} (${selectedPatient?.bed}) हेतु अङ्ग विफलता सोपान एवं प्रसार विश्लेषण`
-              : `Temporal propagation analysis for ${selectedPatient?.name || 'Sunita Sharma'} (${selectedPatient?.bed}) • Interactive nodes & directional links`}
+            Temporal propagation, cross-organ couplings &amp; observed sequence verification
           </p>
         </div>
 
-        {/* Legend */}
-        <div className="flex flex-wrap items-center gap-3 text-xs bg-[#F3F6FA] px-3 py-1.5 rounded-lg border border-vitalis-border">
-          <div className="flex items-center gap-1.5">
-            <span className="w-5 h-0.5 bg-vitalis-navy inline-block" />
-            <span className="text-slate-800 font-medium">{tc.reviewedLink}</span>
+        {/* Patient & Anchor Selector */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative">
+            <select
+              value={selectedPatientId}
+              onChange={(e) => setSelectedPatientId(e.target.value)}
+              className="appearance-none bg-slate-50 border border-vitalis-border rounded-lg pl-3 pr-8 py-1.5 text-xs font-semibold text-vitalis-navy focus:outline-none focus:border-vitalis-blue cursor-pointer"
+            >
+              {patients.map((pat) => (
+                <option key={pat.id} value={pat.id}>
+                  {pat.id} — {pat.name} ({pat.bed})
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="w-3.5 h-3.5 text-vitalis-muted absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-5 h-0.5 border-t-2 border-dashed border-slate-400 inline-block" />
-            <span className="text-vitalis-muted">{tc.observedAssociation}</span>
+
+          <div className="flex items-center gap-1 bg-slate-50 border border-vitalis-border rounded-lg p-1 text-xs">
+            <Clock className="w-3.5 h-3.5 text-vitalis-muted ml-1" />
+            <select
+              value={currentAnchor?.hour}
+              onChange={(e) => setSelectedAnchorHour(Number(e.target.value))}
+              className="bg-transparent text-vitalis-navy font-mono font-bold focus:outline-none cursor-pointer pr-1"
+            >
+              {anchors.map((anc) => (
+                <option key={anc.hour} value={anc.hour}>
+                  Hour {anc.hour}h
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
 
-      {/* Prominent Clinical Methodology & Causality Disclaimer Banner */}
-      <div className="bg-amber-50/80 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 flex items-start gap-2.5 shadow-subtle">
-        <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-        <div className="space-y-0.5">
-          <span className="font-semibold text-amber-900">
-            {language === 'hi' ? 'चिकित्सीय कारण-संबंध सूचना (Causality Notice):' : 'Clinical Epistemology & Causality Notice:'}
-          </span>
-          <p className="text-[11px] text-amber-800 leading-relaxed">
-            {language === 'hi'
-              ? 'दिशात्मक तीर प्रेक्षित समय-क्रम एवं प्रकाशित रोग-शारीरिक प्रतिरूपों को दर्शाते हैं। चिकित्सकीय AI नियमों के अनुसार, सांख्यिकीय सहसंबंध को अंतिम सिद्ध कारण नहीं माना जाता।'
-              : 'Temporal directional edges illustrate observed chronological precedence and published pathophysiological models. In accordance with clinical AI governance guidelines, statistical correlation is never represented as proven definitive causality.'}
-          </p>
-        </div>
-      </div>
+      {/* Main Flow Canvas & Evidence Panel */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+        {/* Canvas - 3 Cols */}
+        <div className="lg:col-span-3 bg-white rounded-lg border border-vitalis-border shadow-subtle overflow-hidden flex flex-col h-[520px] relative">
+          {/* Canvas Top Bar / Legend */}
+          <div className="p-3 bg-slate-50 border-b border-vitalis-border flex flex-wrap items-center justify-between gap-3 text-xs select-none">
+            <div className="flex items-center gap-4">
+              <span className="font-semibold text-vitalis-navy uppercase text-[11px] tracking-wider">
+                Graph Legend:
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="w-6 h-0.5 bg-[#2563EB]" />
+                <span className="text-[11px] text-slate-700">Observed Sequence (Plausible)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-6 h-0.5 border-b border-dashed border-[#94A3B8]" />
+                <span className="text-[11px] text-slate-500">Plausible Pathway</span>
+              </div>
+            </div>
 
-      {/* Main Graph Canvas & Evidence Panel */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[560px]">
-        {/* Left 3 Cols: React Flow Canvas */}
-        <div className="lg:col-span-3 bg-white rounded-lg border border-vitalis-border shadow-subtle relative overflow-hidden flex flex-col">
-          <div className="flex-1 w-full h-full">
+            <div className="text-[11px] text-vitalis-muted font-mono">
+              Active Anchor: <strong className="text-vitalis-navy">{currentAnchor?.hour}h</strong>
+            </div>
+          </div>
+
+          {/* React Flow Container */}
+          <div className="flex-1 w-full h-full bg-[#F8FAFC]">
             <ReactFlow
-              nodes={styledNodes}
-              edges={styledEdges}
+              nodes={nodes}
+              edges={edges}
               nodeTypes={nodeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
               fitView
-              fitViewOptions={{ padding: 0.2 }}
+              fitViewOptions={{ padding: 0.25 }}
               minZoom={0.5}
               maxZoom={1.5}
             >
-              <Background color="#DCE4EF" gap={16} size={1} />
-              <Controls showInteractive={false} className="!bg-white !border !border-vitalis-border !rounded !shadow-subtle" />
+              <Background color="#DCE4EF" gap={20} size={1} />
+              <Controls className="!bg-white !border !border-vitalis-border !rounded-lg !shadow-subtle" />
             </ReactFlow>
           </div>
 
-          {/* Bottom Interactive Timeline Slider */}
-          <div className="border-t border-vitalis-border bg-slate-50/90 p-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span className="text-xs font-bold text-vitalis-navy uppercase tracking-wider flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5 text-vitalis-blue" />
-                {tc.timelineTitle}
-              </span>
-              <span className="text-xs font-semibold text-slate-800 bg-white px-2 py-0.5 rounded border border-vitalis-border shadow-subtle">
-                {tc.step} {currentStepIndex + 1} / {timelineSteps.length}: {activeStep.label}
-              </span>
-            </div>
-
-            {/* Slider Controls */}
-            <div className="flex items-center gap-3 flex-1 max-w-md">
-              <button
-                onClick={() => setCurrentStepIndex(0)}
-                className="p-1 text-vitalis-muted hover:text-vitalis-navy"
-                title="Reset to Hour 0"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
-
-              <input
-                type="range"
-                min={0}
-                max={timelineSteps.length - 1}
-                value={currentStepIndex}
-                onChange={(e) => setCurrentStepIndex(Number(e.target.value))}
-                className="w-full accent-vitalis-navy cursor-pointer"
-              />
-
-              <button
-                onClick={() => setCurrentStepIndex((prev) => (prev < timelineSteps.length - 1 ? prev + 1 : prev))}
-                disabled={currentStepIndex === timelineSteps.length - 1}
-                className="p-1 text-vitalis-muted hover:text-vitalis-navy disabled:opacity-40"
-                title="Next Step"
-              >
-                <SkipForward className="w-3.5 h-3.5" />
-              </button>
-            </div>
+          {/* Canvas Non-Causal Guardrail Footer */}
+          <div className="p-2.5 bg-amber-50 border-t border-amber-200 text-[10px] text-amber-900 flex items-center justify-between">
+            <span>
+              <strong>Clinical Guardrail:</strong> {patient.cascade?.note || 'Sequence and plausibility only. Never represents correlation as proven causality.'}
+            </span>
+            <span className="font-mono text-amber-800">4-hourly anchor step</span>
           </div>
         </div>
 
-        {/* Right 1 Col: Evidence Detail Panel */}
-        <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle flex flex-col overflow-y-auto max-h-[560px]">
-          <div className="pb-3 border-b border-vitalis-border flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <Info className="w-4 h-4 text-vitalis-navy" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy">
-                {tc.evidenceTitle}
-              </h3>
-            </div>
-            <span className="text-[10px] text-vitalis-muted">
-              {selectedNodeData ? 'Node Selected' : selectedEdgeData ? 'Edge Selected' : 'Overview'}
-            </span>
+        {/* Evidence & Details Side Panel - 1 Col */}
+        <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-4">
+          <div className="flex items-center gap-2 border-b border-vitalis-border pb-2.5">
+            <Info className="w-4 h-4 text-vitalis-navy" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+              Coupling &amp; Evidence Audit
+            </h3>
           </div>
 
-          <div className="flex-1 py-3 space-y-4 text-xs">
-            {selectedNodeData && (
-              <div className="space-y-3">
-                <div>
-                  <Badge variant="navy" size="xs">
-                    {selectedNodeData.category.toUpperCase()} SYSTEM
-                  </Badge>
-                  <h4 className="text-sm font-bold text-vitalis-navy mt-1">
-                    {selectedNodeData.label}
-                  </h4>
-                  <p className="text-[11px] text-vitalis-muted mt-0.5">
-                    {selectedNodeData.sublabel} ({selectedNodeData.timestamp})
-                  </p>
-                </div>
-
-                <div className="bg-slate-50 border border-vitalis-border rounded p-2.5 flex justify-between items-center">
-                  <span className="text-vitalis-muted">{selectedNodeData.primaryMetric.name}:</span>
-                  <span className="font-mono font-bold text-sm text-slate-900">
-                    {selectedNodeData.primaryMetric.value}{' '}
-                    <span className="text-xs text-red-600 font-sans">
-                      ({selectedNodeData.primaryMetric.deltaVsBaseline})
-                    </span>
+          {selectedElement?.type === 'node' && (
+            <div className="space-y-3 text-xs">
+              <div className="p-3 rounded-lg bg-slate-50 border border-vitalis-border space-y-1.5">
+                <span className="text-[10px] uppercase font-bold text-vitalis-muted tracking-wider block">
+                  Organ Node Selected
+                </span>
+                <h4 className="text-sm font-bold text-vitalis-navy">
+                  {selectedElement.data.label}
+                </h4>
+                <div className="flex items-center justify-between pt-1 text-[11px]">
+                  <span>Status:</span>
+                  <span className="font-semibold capitalize text-slate-800">
+                    {selectedElement.data.status}
                   </span>
                 </div>
-
-                <div className="space-y-1.5">
-                  <span className="font-bold text-[11px] text-vitalis-navy uppercase tracking-wider">
-                    {tc.observedTelemetry}
+                <div className="flex items-center justify-between text-[11px]">
+                  <span>Modelled Risk:</span>
+                  <span className="font-mono font-bold text-vitalis-navy">
+                    {formatRiskPercent(selectedElement.data.risk)}
                   </span>
-                  <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-700">
-                    {selectedNodeData.observedEvidence.map((ev, i) => (
-                      <li key={i}>{ev}</li>
-                    ))}
-                  </ul>
                 </div>
-
-                {selectedNodeData.reviewedPathophysiology && (
-                  <div className="space-y-1 bg-sky-50/70 border border-sky-100 rounded p-2.5">
-                    <span className="font-bold text-[10px] text-vitalis-navy uppercase tracking-wider flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3 text-vitalis-teal" />
-                      {tc.pathophysiologyBasis}
-                    </span>
-                    <p className="text-[11px] text-sky-950 leading-relaxed">
-                      {selectedNodeData.reviewedPathophysiology}
-                    </p>
+                {selectedElement.data.eventHour !== undefined && (
+                  <div className="flex items-center justify-between text-[11px] text-amber-800 font-semibold pt-1 border-t border-slate-200">
+                    <span>First Detected Divergence:</span>
+                    <span>{selectedElement.data.eventHour}h</span>
                   </div>
                 )}
               </div>
-            )}
+              <p className="text-[11px] text-vitalis-muted">
+                Click any connecting directional arrow to examine coupling rationale and empirical lag times.
+              </p>
+            </div>
+          )}
 
-            {selectedEdgeData && (
-              <div className="space-y-3">
-                <div>
-                  <Badge
-                    variant={selectedEdgeData.isClinicallyReviewed ? 'teal' : 'outline'}
-                    size="xs"
-                  >
-                    {selectedEdgeData.isClinicallyReviewed
-                      ? tc.reviewedLink
-                      : tc.observedAssociation}
-                  </Badge>
-                  <h4 className="text-sm font-bold text-vitalis-navy mt-1">
-                    {tc.propagationMechanism}
-                  </h4>
-                  <div className="flex items-center gap-2 text-[11px] text-vitalis-muted mt-0.5">
-                    <span>Lag: <strong className="text-slate-800">{selectedEdgeData.temporalLag}</strong></span>
-                    <span>•</span>
-                    <span>r: <strong className="font-mono text-slate-800">{selectedEdgeData.correlationScore}</strong></span>
+          {selectedElement?.type === 'edge' && (
+            <div className="space-y-3 text-xs">
+              <div className="p-3 rounded-lg bg-slate-50 border border-vitalis-border space-y-2">
+                <span className="text-[10px] uppercase font-bold text-vitalis-muted tracking-wider block">
+                  Cascade Coupling Selected
+                </span>
+                <div className="flex items-center gap-1.5 font-bold text-vitalis-navy">
+                  <span className="uppercase">{selectedElement.data.source}</span>
+                  <span>&rarr;</span>
+                  <span className="uppercase">{selectedElement.data.target}</span>
+                </div>
+
+                <div className="space-y-1 text-[11px] pt-1 border-t border-slate-200">
+                  <div className="text-vitalis-muted">Classification:</div>
+                  <div className="font-semibold text-slate-800">
+                    {selectedElement.data.classificationText}
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <span className="font-bold text-[11px] text-vitalis-navy uppercase tracking-wider">
-                    {tc.directionalDynamics}
-                  </span>
-                  <p className="text-[11px] text-slate-700 bg-slate-50 border border-vitalis-border rounded p-2.5 leading-relaxed">
-                    {selectedEdgeData.directionDescription}
-                  </p>
-                </div>
+                {selectedElement.data.lag_hours !== null && selectedElement.data.lag_hours !== undefined && (
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-vitalis-muted">Observed Lag:</span>
+                    <span className="font-mono font-bold text-slate-800">
+                      +{selectedElement.data.lag_hours} hours
+                    </span>
+                  </div>
+                )}
 
-                <div className="space-y-1">
-                  <span className="font-bold text-[11px] text-vitalis-navy uppercase tracking-wider">
-                    {tc.statisticalEvidence}
-                  </span>
-                  <p className="text-[11px] text-slate-600 bg-slate-50 border border-vitalis-border rounded p-2 leading-relaxed">
-                    {selectedEdgeData.evidenceSummary}
-                  </p>
-                </div>
-
-                <div className="space-y-1 bg-sky-50/70 border border-sky-100 rounded p-2.5">
-                  <span className="font-bold text-[10px] text-vitalis-navy uppercase tracking-wider">
-                    {tc.physiologicalMechanism}
-                  </span>
-                  <p className="text-[11px] text-sky-950 leading-relaxed">
-                    {selectedEdgeData.pathophysiologicalMechanism}
+                <div className="space-y-1 text-[11px] pt-1 border-t border-slate-200">
+                  <span className="text-vitalis-muted">Physiological Rationale:</span>
+                  <p className="text-slate-800 font-medium">
+                    {selectedElement.data.rationale || 'Coupling under continuous clinical observation.'}
                   </p>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {!selectedNodeData && !selectedEdgeData && (
-              <div className="py-12 text-center text-vitalis-muted space-y-1">
-                <Network className="w-8 h-8 mx-auto text-slate-300" />
-                <p>Click on any organ event node or directional link to view detailed clinical telemetry evidence.</p>
-              </div>
-            )}
+          {!selectedElement && (
+            <div className="p-4 rounded-lg bg-slate-50 border border-vitalis-border text-center text-vitalis-muted text-xs space-y-2">
+              <Layers className="w-5 h-5 mx-auto text-vitalis-muted/70" />
+              <p>Select any organ node or directional pathway on the canvas to inspect coupling mechanisms.</p>
+            </div>
+          )}
+
+          {/* Active Cascade Summary */}
+          <div className="p-3 rounded-lg border border-vitalis-border bg-slate-50/50 space-y-2 text-xs">
+            <span className="text-[10px] font-bold text-vitalis-navy uppercase tracking-wider block">
+              Observed Deterioration Sequence:
+            </span>
+            <div className="space-y-1">
+              {(patient.cascade?.events || []).map((ev, idx) => (
+                <div key={idx} className="flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-slate-800 capitalize">
+                    {idx + 1}. {ev.organ}
+                  </span>
+                  <span className="font-mono text-vitalis-navy font-bold">
+                    Hour {ev.hour}h
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>

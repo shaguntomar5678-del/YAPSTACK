@@ -63,3 +63,54 @@ export function getDeviationBadge(current: number, baseline: number, isHigherWor
     text: `${sign}${pct.toFixed(1)}% vs baseline`
   };
 }
+
+/**
+ * Formats modelled risk value with clinical guardrails.
+ */
+export function formatRiskPercent(risk: number | null | undefined): string {
+  if (risk === null || risk === undefined || isNaN(risk)) return '--';
+  return `${(risk * 100).toFixed(1)}%`;
+}
+
+/**
+ * Returns plain-language text for organ status / not_applicable_reason
+ */
+export function formatNotApplicableReason(reason: string | null | undefined): string {
+  if (!reason) return 'Dysfunction already present';
+  switch (reason) {
+    case 'dysfunction_present':
+      return 'Organ dysfunction already present';
+    case 'no_measurement':
+      return 'No measurements available for evaluation';
+    case 'prior_episode':
+      return 'Prior dysfunction episode noted';
+    default:
+      return reason.replace(/_/g, ' ');
+  }
+}
+
+/**
+ * Clinical risk caption formatter compliant with safety guardrails:
+ * - display_overall === "shown": displays modelled risk percentage and mandatory disclaimer caption
+ * - display_overall === "data_insufficient": displays "Insufficient data"
+ * - display_overall === "not_applicable": displays "Not applicable: organ dysfunction already present"
+ */
+export function formatRiskCaption(
+  display_overall: 'shown' | 'data_insufficient' | 'not_applicable' | string,
+  risk_overall: number | null | undefined,
+  _trustLevel?: string
+): string {
+  if (display_overall === 'data_insufficient') {
+    return 'Insufficient data';
+  }
+  if (display_overall === 'not_applicable') {
+    return 'Not applicable: organ dysfunction already present';
+  }
+  if (risk_overall === null || risk_overall === undefined || isNaN(risk_overall)) {
+    return 'Not available';
+  }
+  return `${(risk_overall * 100).toFixed(1)}% modelled risk`;
+}
+
+export const RISK_DISCLAIMER_CAPTION =
+  '12 h horizon · Calibrated model output on a proxy label; not a validated clinical probability.';

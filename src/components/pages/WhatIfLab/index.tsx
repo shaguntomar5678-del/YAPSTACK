@@ -1,11 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ResponsiveContainer,
   XAxis,
   YAxis,
   Tooltip,
   CartesianGrid,
-  Area,
   ComposedChart,
   Line,
 } from 'recharts';
@@ -17,467 +16,348 @@ import {
   Droplets,
   Heart,
   Wind,
+  AlertTriangle,
+  Info,
+  CheckCircle2,
+  ChevronDown,
 } from 'lucide-react';
 import { useApp } from '../../../context/AppContext';
-import { simulationService } from '../../../services/simulationService';
-import { WhatIfParameters, WhatIfSimulationOutcome } from '../../../types/whatif';
+import { useWhatIf } from '../../../lib/hooks';
 import { Badge } from '../../common/Badge';
+import {
+  formatRiskPercent,
+  RISK_DISCLAIMER_CAPTION,
+} from '../../../utils/formatters';
 import { cn } from '../../../utils/cn';
 
 export const WhatIfLab: React.FC = () => {
-  const { selectedPatient, patients, setSelectedPatientId, language, t } = useApp();
+  const { language, t } = useApp();
 
-  const [parameters, setParameters] = useState<WhatIfParameters>({
-    renalIntensity: 0,
-    cardiacIntensity: 0,
-    respiratoryIntensity: 0,
-    fluidBalanceDeltaMl: 0,
-    simulateMissingLabs: false,
-  });
+  // What-If grid is precomputed for hero patient V-104
+  const { data: whatifData, loading, error } = useWhatIf('V-104');
 
-  const [outcome, setOutcome] = useState<WhatIfSimulationOutcome | null>(null);
-  const [isSimulating, setIsSimulating] = useState<boolean>(false);
+  // Controls that snap exactly to the precomputed grid
+  const [focus, setFocus] = useState<'all' | 'renal' | 'cardio' | 'resp'>('all');
+  const [intensity, setIntensity] = useState<number>(0.75);
+  const [missingLabs, setMissingLabs] = useState<boolean>(false);
 
-  useEffect(() => {
-    if (selectedPatient) {
-      setIsSimulating(true);
-      simulationService.runSimulation(selectedPatient.id, parameters).then((res) => {
-        setOutcome(res);
-        setIsSimulating(false);
-      });
-    }
-  }, [selectedPatient, parameters]);
+  // Baseline/Current is defined by clinical protocol: focus='all', intensity=0.75, missing_labs=false
+  const baselineEntry = useMemo(() => {
+    if (!whatifData?.grid) return null;
+    return (
+      whatifData.grid.find(
+        (g) => g.focus === 'all' && g.intensity === 0.75 && g.missing_labs === false
+      ) || whatifData.grid[0]
+    );
+  }, [whatifData]);
 
-  const applyPreset = (preset: 'diuresis' | 'fluid_bolus' | 'pressor' | 'ventilation' | 'reset') => {
-    switch (preset) {
-      case 'diuresis':
-        setParameters({
-          renalIntensity: -20,
-          cardiacIntensity: -10,
-          respiratoryIntensity: -35,
-          fluidBalanceDeltaMl: -1500,
-          simulateMissingLabs: false,
-        });
-        break;
-      case 'fluid_bolus':
-        setParameters({
-          renalIntensity: 15,
-          cardiacIntensity: 10,
-          respiratoryIntensity: 30,
-          fluidBalanceDeltaMl: 2000,
-          simulateMissingLabs: false,
-        });
-        break;
-      case 'pressor':
-        setParameters({
-          renalIntensity: -15,
-          cardiacIntensity: -25,
-          respiratoryIntensity: 0,
-          fluidBalanceDeltaMl: 0,
-          simulateMissingLabs: false,
-        });
-        break;
-      case 'ventilation':
-        setParameters({
-          renalIntensity: 0,
-          cardiacIntensity: 0,
-          respiratoryIntensity: -40,
-          fluidBalanceDeltaMl: 0,
-          simulateMissingLabs: false,
-        });
-        break;
-      case 'reset':
-        setParameters({
-          renalIntensity: 0,
-          cardiacIntensity: 0,
-          respiratoryIntensity: 0,
-          fluidBalanceDeltaMl: 0,
-          simulateMissingLabs: false,
-        });
-        break;
-    }
+  // Selected counterfactual entry
+  const selectedEntry = useMemo(() => {
+    if (!whatifData?.grid) return null;
+    return (
+      whatifData.grid.find(
+        (g) => g.focus === focus && g.intensity === intensity && g.missing_labs === missingLabs
+      ) || baselineEntry
+    );
+  }, [whatifData, focus, intensity, missingLabs, baselineEntry]);
+
+  // Chart data: compare baseline vs selected counterfactual across anchors (h=12..92)
+  const chartData = useMemo(() => {
+    if (!baselineEntry?.anchors || !selectedEntry?.anchors) return [];
+
+    const baseMap = new Map(baselineEntry.anchors.map((a) => [a.hour, a.risk_overall]));
+    const selMap = new Map(selectedEntry.anchors.map((a) => [a.hour, a.risk_overall]));
+
+    const hours = baselineEntry.anchors.map((a) => a.hour);
+
+    return hours.map((hour) => {
+      const bRisk = baseMap.get(hour);
+      const sRisk = selMap.get(hour);
+      return {
+        hour,
+        label: `${hour}h`,
+        baselineRisk: bRisk !== null && bRisk !== undefined ? bRisk * 100 : null,
+        simulatedRisk: sRisk !== null && sRisk !== undefined ? sRisk * 100 : null,
+      };
+    });
+  }, [baselineEntry, selectedEntry]);
+
+  const handleReset = () => {
+    setFocus('all');
+    setIntensity(0.75);
+    setMissingLabs(false);
   };
 
-  if (!selectedPatient) return null;
+  if (loading) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        Loading What-If in-silico simulation grid for patient V-104...
+      </div>
+    );
+  }
 
-  const tw = t.whatif;
+  if (error || !whatifData) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        <p className="text-vitalis-critical">
+          {error || 'Simulation grid could not be loaded.'}
+        </p>
+      </div>
+    );
+  }
 
-  // Chart data
-  const chartData = outcome
-    ? outcome.simulatedPoints.map((pt) => ({
-        time: pt.hourOffset === 0 ? (language === 'hi' ? 'वर्तमान' : 'Now') : `+${pt.hourOffset}h`,
-        baseline: pt.baselineCompositeScore,
-        hypothetical: pt.hypotheticalCompositeScore,
-        uncertaintyLower: pt.hypotheticalCompositeScore - pt.uncertaintyBandWidth,
-        uncertaintyUpper: pt.hypotheticalCompositeScore + pt.uncertaintyBandWidth,
-        uncertaintyRange: [
-          Math.max(0, pt.hypotheticalCompositeScore - pt.uncertaintyBandWidth),
-          Math.min(100, pt.hypotheticalCompositeScore + pt.uncertaintyBandWidth),
-        ],
-      }))
-    : [];
-
-  const deltaRisk = outcome ? outcome.deltaDecompensationRisk : 0;
+  // Calculate final anchor risk delta
+  const finalBase = baselineEntry?.anchors[baselineEntry.anchors.length - 1]?.risk_overall ?? 0;
+  const finalSim = selectedEntry?.anchors[selectedEntry.anchors.length - 1]?.risk_overall ?? 0;
+  const deltaRisk = (finalSim - finalBase) * 100;
 
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-bold tracking-tight text-vitalis-navy flex items-center gap-2">
               <FlaskConical className="w-5 h-5 text-vitalis-blue" />
-              {tw.title}
+              <span>{language === 'hi' ? 'यदि-प्रयोगशाला (काउंटरफैक्चुअल लैब)' : 'What-If Simulation Laboratory'}</span>
             </h1>
-            <Badge variant="teal" size="xs">
-              {language === 'hi' ? 'परिकल्पित अनुकरण' : 'Deterministic Simulation'}
+            <Badge variant="navy" size="xs">
+              Precomputed Re-Scored Model Grid
             </Badge>
           </div>
           <p className="text-xs text-vitalis-muted mt-0.5">
-            {tw.subtitle} • {selectedPatient.name} ({selectedPatient.bed})
+            Evaluate hypothetical multi-organ trajectory shifts on Patient V-104 (Hero 4-Day Cascade Case)
           </p>
         </div>
 
-        {/* Patient Selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-vitalis-muted font-medium">{language === 'hi' ? 'रोगी:' : 'Patient:'}</span>
-          <select
-            value={selectedPatient.id}
-            onChange={(e) => setSelectedPatientId(e.target.value)}
-            className="bg-background border border-vitalis-border rounded-md px-2.5 py-1 text-xs text-vitalis-text focus:outline-none focus:border-vitalis-blue"
-          >
-            {patients.map((pt) => (
-              <option key={pt.id} value={pt.id}>
-                {pt.name} ({pt.bed})
-              </option>
-            ))}
-          </select>
-        </div>
+        <button
+          type="button"
+          onClick={handleReset}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-vitalis-border bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-vitalis-text transition-colors self-start md:self-auto"
+        >
+          <RotateCcw className="w-3.5 h-3.5 text-vitalis-muted" />
+          <span>Reset to Baseline (Intensity 0.75, Full Labs)</span>
+        </button>
       </div>
 
-      {/* Preset Quick Actions */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-3.5 shadow-subtle flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-xs text-vitalis-muted font-semibold uppercase tracking-wider">
-          <Sparkles className="w-3.5 h-3.5 text-vitalis-blue" />
-          <span>{tw.presets}:</span>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => applyPreset('diuresis')}
-            className="px-2.5 py-1 text-xs font-medium rounded border border-vitalis-border hover:bg-slate-100 transition-colors"
-          >
-            {tw.decongestion}
-          </button>
-          <button
-            onClick={() => applyPreset('fluid_bolus')}
-            className="px-2.5 py-1 text-xs font-medium rounded border border-vitalis-border hover:bg-slate-100 transition-colors"
-          >
-            {tw.volumeChallenge}
-          </button>
-          <button
-            onClick={() => applyPreset('pressor')}
-            className="px-2.5 py-1 text-xs font-medium rounded border border-vitalis-border hover:bg-slate-100 transition-colors"
-          >
-            {tw.pressorEscalation}
-          </button>
-          <button
-            onClick={() => applyPreset('ventilation')}
-            className="px-2.5 py-1 text-xs font-medium rounded border border-vitalis-border hover:bg-slate-100 transition-colors"
-          >
-            {tw.protectiveVent}
-          </button>
-          <button
-            onClick={() => applyPreset('reset')}
-            className="px-2.5 py-1 text-xs font-semibold rounded bg-slate-100 hover:bg-slate-200 text-vitalis-navy flex items-center gap-1"
-          >
-            <RotateCcw className="w-3 h-3" />
-            {tw.resetBaseline}
-          </button>
-        </div>
-      </div>
-
-      {/* Grid: Controls vs Trajectory Comparison */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Interactive Sliders & Toggles */}
+      {/* Grid: Interactive Simulation Controls & Outcome Trajectory */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        {/* Controls Column - 1 Col */}
         <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-5">
-          <div className="pb-3 border-b border-vitalis-border flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-vitalis-navy" />
-              {language === 'hi' ? 'परिकल्पित पैरामीटर स्लाइडर्स' : 'Hypothetical Parameter Sliders'}
+          <div className="flex items-center gap-2 border-b border-vitalis-border pb-2.5">
+            <Sliders className="w-4 h-4 text-vitalis-navy" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+              Simulation Parameters
             </h3>
-            <span className="text-[10px] text-vitalis-muted">Interactive Modifiers</span>
           </div>
 
-          {/* Slider 1: Fluid Balance */}
-          <div className="space-y-1.5">
-            <div className="flex justify-between items-center text-xs">
-              <span className="font-semibold text-slate-800 flex items-center gap-1.5">
-                <Droplets className="w-3.5 h-3.5 text-vitalis-blue" />
-                {tw.fluidBalanceChange}
-              </span>
-              <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
-                {parameters.fluidBalanceDeltaMl > 0 ? `+${parameters.fluidBalanceDeltaMl}` : parameters.fluidBalanceDeltaMl} mL
+          {/* Organ Focus Selector */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-vitalis-text block">
+              1. Organ Perturbation Target Focus:
+            </label>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              {[
+                { key: 'all', label: 'All Systems' },
+                { key: 'renal', label: 'Renal' },
+                { key: 'cardio', label: 'Cardiovascular' },
+                { key: 'resp', label: 'Respiratory' },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setFocus(item.key as any)}
+                  className={cn(
+                    'p-2 rounded-lg border text-left font-medium transition-all text-xs',
+                    focus === item.key
+                      ? 'bg-vitalis-navy text-white border-vitalis-navy shadow-subtle'
+                      : 'bg-slate-50 border-vitalis-border text-slate-700 hover:bg-slate-100'
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Intensity Slider (Snaps to grid: 0, 0.25, 0.5, 0.75, 1.0) */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-vitalis-text">2. Perturbation Intensity:</span>
+              <span className="font-mono font-bold text-vitalis-navy bg-slate-100 px-2 py-0.5 rounded">
+                {(intensity * 100).toFixed(0)}%
               </span>
             </div>
             <input
               type="range"
-              min={-2000}
-              max={3000}
-              step={250}
-              value={parameters.fluidBalanceDeltaMl}
-              onChange={(e) =>
-                setParameters({ ...parameters, fluidBalanceDeltaMl: Number(e.target.value) })
-              }
+              min="0"
+              max="1"
+              step="0.25"
+              value={intensity}
+              onChange={(e) => setIntensity(Number(e.target.value))}
               className="w-full accent-vitalis-navy cursor-pointer"
             />
-            <div className="flex justify-between text-[10px] text-vitalis-muted">
-              <span>-2,000 mL ({language === 'hi' ? 'द्रव निष्कासन' : 'Diuresis'})</span>
-              <span>0 (Baseline)</span>
-              <span>+3,000 mL ({language === 'hi' ? 'विस्तारण' : 'Resuscitation'})</span>
+            <div className="flex justify-between text-[10px] text-vitalis-muted font-mono">
+              <span>0% (Norm)</span>
+              <span>25%</span>
+              <span>50%</span>
+              <span>75% (Base)</span>
+              <span>100% (Max)</span>
             </div>
           </div>
 
-          {/* Slider 2: Renal Intensity */}
-          <div className="space-y-1.5">
-            <div className="flex justify-between items-center text-xs">
-              <span className="font-semibold text-slate-800 flex items-center gap-1.5">
-                <Droplets className="w-3.5 h-3.5 text-vitalis-blue" />
-                {tw.renalModifier}
-              </span>
-              <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
-                {parameters.renalIntensity > 0 ? `+${parameters.renalIntensity}` : parameters.renalIntensity}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min={-50}
-              max={100}
-              step={5}
-              value={parameters.renalIntensity}
-              onChange={(e) =>
-                setParameters({ ...parameters, renalIntensity: Number(e.target.value) })
-              }
-              className="w-full accent-vitalis-blue cursor-pointer"
-            />
-            <div className="flex justify-between text-[10px] text-vitalis-muted">
-              <span>-50% ({language === 'hi' ? 'सुरक्षा' : 'Protection'})</span>
-              <span>0% (Status Quo)</span>
-              <span>+100% ({language === 'hi' ? 'क्षति' : 'Injury Spike'})</span>
-            </div>
-          </div>
-
-          {/* Slider 3: Cardiac Intensity */}
-          <div className="space-y-1.5">
-            <div className="flex justify-between items-center text-xs">
-              <span className="font-semibold text-slate-800 flex items-center gap-1.5">
-                <Heart className="w-3.5 h-3.5 text-red-600" />
-                {tw.cardiacModifier}
-              </span>
-              <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
-                {parameters.cardiacIntensity > 0 ? `+${parameters.cardiacIntensity}` : parameters.cardiacIntensity}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min={-50}
-              max={100}
-              step={5}
-              value={parameters.cardiacIntensity}
-              onChange={(e) =>
-                setParameters({ ...parameters, cardiacIntensity: Number(e.target.value) })
-              }
-              className="w-full accent-red-600 cursor-pointer"
-            />
-            <div className="flex justify-between text-[10px] text-vitalis-muted">
-              <span>-50% (Optimization)</span>
-              <span>0% (Status Quo)</span>
-              <span>+100% (Pump Failure)</span>
-            </div>
-          </div>
-
-          {/* Slider 4: Respiratory Intensity */}
-          <div className="space-y-1.5">
-            <div className="flex justify-between items-center text-xs">
-              <span className="font-semibold text-slate-800 flex items-center gap-1.5">
-                <Wind className="w-3.5 h-3.5 text-vitalis-teal" />
-                {tw.respModifier}
-              </span>
-              <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
-                {parameters.respiratoryIntensity > 0 ? `+${parameters.respiratoryIntensity}` : parameters.respiratoryIntensity}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min={-50}
-              max={100}
-              step={5}
-              value={parameters.respiratoryIntensity}
-              onChange={(e) =>
-                setParameters({ ...parameters, respiratoryIntensity: Number(e.target.value) })
-              }
-              className="w-full accent-vitalis-teal cursor-pointer"
-            />
-            <div className="flex justify-between text-[10px] text-vitalis-muted">
-              <span>-50% (Clearance)</span>
-              <span>0% (Status Quo)</span>
-              <span>+100% (Severe ARDS)</span>
-            </div>
-          </div>
-
-          {/* Missing Labs Simulation Toggle */}
-          <div className="pt-3 border-t border-vitalis-border">
-            <label className="flex items-start gap-2.5 cursor-pointer">
+          {/* Missing Labs Toggle */}
+          <div className="space-y-2 pt-2 border-t border-vitalis-border">
+            <label className="text-xs font-semibold text-vitalis-text block">
+              3. Telemetry Completeness:
+            </label>
+            <label className="flex items-start gap-2.5 p-3 rounded-lg border border-vitalis-border bg-slate-50/80 cursor-pointer hover:bg-slate-100 transition-colors">
               <input
                 type="checkbox"
-                checked={parameters.simulateMissingLabs}
-                onChange={(e) =>
-                  setParameters({ ...parameters, simulateMissingLabs: e.target.checked })
-                }
-                className="mt-0.5 rounded border-vitalis-border text-vitalis-navy focus:ring-0 accent-vitalis-navy"
+                checked={missingLabs}
+                onChange={(e) => setMissingLabs(e.target.checked)}
+                className="mt-0.5 accent-vitalis-navy rounded"
               />
               <div className="text-xs">
-                <span className="font-semibold text-slate-800 block">
-                  {tw.missingLabs}
+                <span className="font-bold text-slate-800 block">
+                  Simulate Missing Laboratory Measurements
                 </span>
-                <span className="text-[11px] text-vitalis-muted leading-tight">
-                  {tw.missingLabsSub}
+                <span className="text-[11px] text-vitalis-muted leading-snug block mt-0.5">
+                  Evaluates model resilience when creatinine and lactate sampling intervals drop out.
                 </span>
               </div>
             </label>
           </div>
+
+          {/* Fluid Balance Disclaimer Slider */}
+          <div className="space-y-2 pt-2 border-t border-vitalis-border opacity-70">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-slate-500">Fluid Balance Adjustment:</span>
+              <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded font-mono">
+                Not Modelled
+              </span>
+            </div>
+            <input
+              type="range"
+              disabled
+              value={0}
+              className="w-full accent-slate-400 cursor-not-allowed"
+            />
+            <p className="text-[10px] text-amber-800 italic">
+              Fluid balance is illustrative only — not an input feature in the trained proxy model.
+            </p>
+          </div>
         </div>
 
-        {/* Right 2 Cols: Simulation Comparison & Physiological Rationale */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Comparison Outcome Cards */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-card rounded-lg border border-vitalis-border p-3.5 shadow-subtle">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-vitalis-muted block">
-                {tw.riskDelta}
-              </span>
-              <div className="flex items-baseline gap-1 mt-1">
-                <span
-                  className={cn(
-                    'text-2xl font-bold font-mono',
-                    deltaRisk > 0
-                      ? 'text-vitalis-critical'
-                      : deltaRisk < 0
-                      ? 'text-emerald-700'
-                      : 'text-slate-700'
-                  )}
-                >
-                  {deltaRisk > 0 ? `+${deltaRisk}` : deltaRisk} pts
-                </span>
-              </div>
-              <span className="text-[10px] text-vitalis-muted">
-                {deltaRisk < 0 ? (language === 'hi' ? 'जोखिम में कमी' : 'Trajectory mitigated') : deltaRisk > 0 ? (language === 'hi' ? 'जोखिम में वृद्धि' : 'Trajectory worsened') : 'Identical to baseline'}
-              </span>
-            </div>
-
-            <div className="bg-card rounded-lg border border-vitalis-border p-3.5 shadow-subtle">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-vitalis-muted block">
-                {tw.hypotheticalTier}
-              </span>
-              <div className="mt-1">
-                <Badge
-                  variant={
-                    outcome?.hypotheticalRiskTier === 'Critical'
-                      ? 'critical'
-                      : outcome?.hypotheticalRiskTier === 'Urgent'
-                      ? 'warning'
-                      : 'stable'
-                  }
-                  size="md"
-                  dot
-                >
-                  {outcome?.hypotheticalRiskTier || 'Critical'}
-                </Badge>
-              </div>
-              <span className="text-[10px] text-vitalis-muted block mt-1">
-                {language === 'hi' ? 'अनुमानित श्रेणी' : 'Predicted risk tier'}
-              </span>
-            </div>
-
-            <div className="bg-card rounded-lg border border-vitalis-border p-3.5 shadow-subtle">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-vitalis-muted block">
-                {tw.confidenceRating}
-              </span>
-              <div className="text-sm font-bold text-slate-800 mt-1">
-                {outcome?.confidenceRating || 'High'}
-              </div>
-              <span className="text-[10px] text-vitalis-muted">
-                {parameters.simulateMissingLabs ? 'Band widened ±18 pts' : 'Calibrated standard band'}
-              </span>
-            </div>
-          </div>
-
-          {/* Comparative Chart */}
-          <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy">
-                {tw.comparisonTitle}
+        {/* Outcome Trajectory & Comparison Chart - 2 Cols */}
+        <div className="lg:col-span-2 bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-vitalis-border pb-3">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+                Observed Baseline vs. Counterfactual Trajectory
               </h3>
-              <div className="flex items-center gap-3 text-xs">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-3 h-0.5 bg-slate-400 inline-block" />
-                  <span className="text-vitalis-muted">{language === 'hi' ? 'मूल प्रक्षेपवक्र' : 'Baseline Path'}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-3 h-0.5 bg-vitalis-blue inline-block" />
-                  <span className="text-vitalis-blue font-semibold">{language === 'hi' ? 'परिकल्पित अनुकरण' : 'Hypothetical Simulation'}</span>
-                </div>
-              </div>
+              <p className="text-[11px] text-vitalis-muted mt-0.5">
+                Blue Line: Observed Baseline (Intensity 0.75) • Amber Line: Variant ({focus}, {(intensity * 100).toFixed(0)}%{missingLabs ? ', missing labs' : ''})
+              </p>
             </div>
 
-            <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={chartData} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#DCE4EF" vertical={false} />
-                  <XAxis dataKey="time" tick={{ fontSize: 11, fill: '#64748B' }} stroke="#DCE4EF" />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#64748B' }} stroke="#DCE4EF" />
-                  <Tooltip contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#DCE4EF', fontSize: '12px' }} />
-                  <Area type="monotone" dataKey="uncertaintyRange" name="Simulation Uncertainty Band" fill="#2563EB" fillOpacity={0.12} stroke="none" />
-                  <Line type="monotone" dataKey="baseline" name="Baseline Trajectory" stroke="#94A3B8" strokeWidth={2} strokeDasharray="4 2" dot={false} />
-                  <Line type="monotone" dataKey="hypothetical" name="Simulated Trajectory" stroke="#2563EB" strokeWidth={3} dot={false} />
-                </ComposedChart>
-              </ResponsiveContainer>
+            <div className="flex items-center gap-2 text-xs">
+              <Badge variant={deltaRisk <= 0 ? 'stable' : 'critical'}>
+                Final Delta: {deltaRisk > 0 ? `+${deltaRisk.toFixed(1)}%` : `${deltaRisk.toFixed(1)}%`}
+              </Badge>
             </div>
           </div>
 
-          {/* Organ Impact Breakdown & Physiological Rationale */}
-          <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy">
-              {tw.organSensitivity}
-            </h3>
+          {/* Chart Display */}
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={chartData} margin={{ top: 15, right: 20, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#DCE4EF" vertical={false} />
+                <XAxis dataKey="label" stroke="#64748B" fontSize={11} tickLine={false} />
+                <YAxis
+                  stroke="#64748B"
+                  fontSize={11}
+                  tickLine={false}
+                  domain={[0, 100]}
+                  tickFormatter={(val) => `${val}%`}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#FFFFFF',
+                    borderColor: '#DCE4EF',
+                    borderRadius: '8px',
+                    fontSize: '11px',
+                  }}
+                  formatter={(val: any, name: string) => [
+                    typeof val === 'number' ? `${val.toFixed(1)}%` : '--',
+                    name,
+                  ]}
+                />
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-              {outcome?.organImpacts.map((imp, idx) => (
-                <div key={idx} className="bg-slate-50 border border-vitalis-border rounded p-3 space-y-1">
-                  <div className="flex justify-between items-center font-semibold">
-                    <span className="capitalize text-slate-800">{imp.organ}</span>
-                    <span
-                      className={cn(
-                        'font-mono text-[11px]',
-                        imp.deltaScore > 0 ? 'text-red-700 font-bold' : imp.deltaScore < 0 ? 'text-emerald-700 font-bold' : 'text-slate-600'
-                      )}
-                    >
-                      {imp.deltaScore > 0 ? `+${imp.deltaScore}` : imp.deltaScore} pts
-                    </span>
+                <Line
+                  type="monotone"
+                  dataKey="baselineRisk"
+                  stroke="#123B82"
+                  strokeWidth={2.5}
+                  dot={{ r: 3, fill: '#123B82' }}
+                  name="Observed Baseline (V-104)"
+                  connectNulls
+                />
+
+                <Line
+                  type="monotone"
+                  dataKey="simulatedRisk"
+                  stroke="#D97706"
+                  strokeWidth={2}
+                  strokeDasharray="4 4"
+                  dot={{ r: 3, fill: '#D97706' }}
+                  name="Counterfactual Simulation"
+                  connectNulls
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Anchor Comparison Snapshot Grid */}
+          <div className="space-y-2 pt-2 border-t border-vitalis-border">
+            <span className="text-[11px] font-bold text-vitalis-navy uppercase tracking-wider block">
+              Anchor Replay Snapshot (Hours 60, 72, 84, 92):
+            </span>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+              {[60, 72, 84, 92].map((h) => {
+                const bPoint = baselineEntry?.anchors.find((a) => a.hour === h);
+                const sPoint = selectedEntry?.anchors.find((a) => a.hour === h);
+                const bVal = bPoint?.risk_overall !== null && bPoint?.risk_overall !== undefined ? bPoint.risk_overall * 100 : null;
+                const sVal = sPoint?.risk_overall !== null && sPoint?.risk_overall !== undefined ? sPoint.risk_overall * 100 : null;
+                const diff = bVal !== null && sVal !== null ? sVal - bVal : null;
+
+                return (
+                  <div key={h} className="p-2.5 rounded-lg border border-vitalis-border bg-slate-50 space-y-1">
+                    <div className="font-bold text-slate-800 text-[11px]">
+                      Hour {h}h
+                    </div>
+                    <div className="text-[10px] text-vitalis-muted flex justify-between">
+                      <span>Baseline:</span>
+                      <span className="font-mono text-slate-700">{bVal !== null ? `${bVal.toFixed(1)}%` : '--'}</span>
+                    </div>
+                    <div className="text-[10px] text-vitalis-muted flex justify-between">
+                      <span>Variant:</span>
+                      <span className="font-mono text-amber-700 font-semibold">{sVal !== null ? `${sVal.toFixed(1)}%` : '--'}</span>
+                    </div>
+                    {diff !== null && (
+                      <div className="text-[10px] font-mono text-right font-bold pt-0.5 border-t border-slate-200">
+                        {diff > 0 ? `+${diff.toFixed(1)}%` : `${diff.toFixed(1)}%`}
+                      </div>
+                    )}
                   </div>
-                  <p className="text-[11px] text-vitalis-muted leading-relaxed">
-                    {imp.explanation}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
+          </div>
 
-            <div className="pt-2 border-t border-vitalis-border text-[11px] text-slate-700 leading-relaxed bg-sky-50/60 p-3 rounded border border-sky-100">
-              <span className="font-semibold text-vitalis-navy">
-                {language === 'hi' ? 'शारीरिक तंत्र व्याख्या:' : 'Simulation Mechanistic Model:'}{' '}
-              </span>
-              {outcome?.physiologicalRationale}
-            </div>
+          {/* Clinical Guardrail Footer */}
+          <div className="p-3 rounded-lg bg-amber-50/70 border border-amber-200 text-[10px] text-amber-800 leading-relaxed">
+            <strong>Clinical Warning:</strong> What-If simulations are deterministic re-scorings of precomputed in-silico grid entries. No causal clinical intervention outcome or pharmacologic efficacy is implied.
           </div>
         </div>
       </div>

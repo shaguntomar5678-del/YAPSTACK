@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -24,741 +24,723 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useApp } from '../../../context/AppContext';
-import { Badge } from '../../common/Badge';
-import { cn } from '../../../utils/cn';
 import { usePatient } from '../../../lib/hooks';
-import type { PatientRecord, Anchor, OrganAnchor } from '../../../lib/schemas';
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function genderLabel(g: number): string {
-  return g === 1 ? 'M' : 'F';
-}
-
-function trustVariant(level: string): 'stable' | 'warning' | 'critical' | 'watch' {
-  if (level === 'high') return 'stable';
-  if (level === 'moderate' || level === 'medium') return 'watch';
-  if (level === 'low') return 'warning';
-  return 'critical'; // insufficient
-}
-
-function organLabel(key: string): string {
-  const map: Record<string, string> = {
-    renal: 'Renal',
-    hepatic: 'Hepatic',
-    cardio: 'Cardiac',
-    resp: 'Respiratory',
-  };
-  return map[key] ?? key;
-}
-
-function organIcon(key: string): React.ReactNode {
-  const cls = 'w-3.5 h-3.5';
-  if (key === 'renal') return <Droplets className={cls} />;
-  if (key === 'hepatic') return <Activity className={cls} />;
-  if (key === 'cardio') return <Heart className={cls} />;
-  if (key === 'resp') return <Wind className={cls} />;
-  return <Activity className={cls} />;
-}
-
-function organIconBg(key: string): string {
-  if (key === 'renal') return 'bg-blue-50 text-vitalis-blue border-blue-100';
-  if (key === 'hepatic') return 'bg-amber-50 text-amber-700 border-amber-100';
-  if (key === 'cardio') return 'bg-red-50 text-red-600 border-red-100';
-  if (key === 'resp') return 'bg-teal-50 text-teal-700 border-teal-100';
-  return 'bg-slate-50 text-slate-600 border-slate-100';
-}
-
-function organTabKey(key: string): string {
-  // Map organ key to OrganType used in setSelectedOrganTab
-  if (key === 'cardio') return 'cardiac';
-  if (key === 'resp') return 'respiratory';
-  return key;
-}
-
-function mapNotApplicableReason(reason: string | null | undefined): string {
-  if (!reason) return 'Organ dysfunction already present';
-  const r = reason.toLowerCase();
-  if (r.includes('aki') || r.includes('renal')) return 'Acute kidney injury already documented';
-  if (r.includes('liver') || r.includes('hepatic')) return 'Hepatic dysfunction already present';
-  if (r.includes('cardiac') || r.includes('cardio') || r.includes('heart')) return 'Cardiac dysfunction already established';
-  if (r.includes('resp') || r.includes('lung') || r.includes('pulm')) return 'Respiratory failure already documented';
-  if (r.includes('septic') || r.includes('sepsis')) return 'Septic shock — systemic dysfunction present';
-  return reason;
-}
-
-function getBaselineValue(baselines: PatientRecord['baselines'], key: string): number | null {
-  const val = baselines[key];
-  if (val === undefined || val === null) return null;
-  if (typeof val === 'number') return val;
-  if (typeof val === 'object' && 'mean' in val) return (val as { mean?: number }).mean ?? null;
-  return null;
-}
-
-// ─── Organ Card ───────────────────────────────────────────────────────────────
-
-interface OrganCardProps {
-  organKey: string;
-  organ: OrganAnchor;
-  onNavigate: () => void;
-}
-
-const OrganCard: React.FC<OrganCardProps> = ({ organKey, organ, onNavigate }) => {
-  const statusConfig = useMemo(() => {
-    switch (organ.status) {
-      case 'elevated':
-        return {
-          badgeClass: 'bg-amber-100 text-amber-800 border border-amber-200',
-          label: 'Elevated Risk',
-          dot: 'bg-amber-500',
-        };
-      case 'low':
-        return {
-          badgeClass: 'bg-emerald-100 text-emerald-800 border border-emerald-200',
-          label: 'Low Risk',
-          dot: 'bg-emerald-500',
-        };
-      case 'dysfunction_present':
-        return {
-          badgeClass: 'bg-red-100 text-red-800 border border-red-200',
-          label: 'Dysfunction Present',
-          dot: 'bg-red-500',
-        };
-      case 'insufficient_data':
-        return {
-          badgeClass: 'bg-slate-100 text-slate-600 border border-slate-200',
-          label: 'Insufficient Data',
-          dot: 'bg-slate-400',
-        };
-      default:
-        return {
-          badgeClass: 'bg-slate-100 text-slate-600 border border-slate-200',
-          label: organ.status,
-          dot: 'bg-slate-400',
-        };
-    }
-  }, [organ.status]);
-
-  return (
-    <div
-      onClick={onNavigate}
-      className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle hover:border-vitalis-blue/50 cursor-pointer transition-all group"
-    >
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <div className={cn('w-7 h-7 rounded flex items-center justify-center font-bold text-xs border', organIconBg(organKey))}>
-            {organIcon(organKey)}
-          </div>
-          <div>
-            <h2 className="text-xs font-bold text-vitalis-navy group-hover:text-vitalis-blue">
-              {organLabel(organKey)}
-            </h2>
-            {organ.change_flag && (
-              <span className="text-[10px] text-amber-600 font-semibold">↑ Change detected</span>
-            )}
-          </div>
-        </div>
-        <span className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1', statusConfig.badgeClass)}>
-          <span className={cn('w-1.5 h-1.5 rounded-full inline-block', statusConfig.dot)} />
-          {statusConfig.label}
-        </span>
-      </div>
-
-      <div className="space-y-1.5 mt-3 pt-2 border-t border-vitalis-border/60 text-xs">
-        {(organ.status === 'elevated' || organ.status === 'low') && organ.risk != null && (
-          <div className="flex justify-between items-center">
-            <span className="text-vitalis-muted text-[11px]">Modelled risk:</span>
-            <span className="font-mono font-bold text-slate-900">
-              {(organ.risk * 100).toFixed(1)}%
-            </span>
-          </div>
-        )}
-        {organ.status === 'dysfunction_present' && (
-          <div className="text-[11px] text-red-700 font-medium leading-snug">
-            {mapNotApplicableReason(organ.not_applicable_reason)}
-          </div>
-        )}
-        {organ.status === 'insufficient_data' && (
-          <div className="text-[11px] text-slate-500 italic">
-            Not enough data to compute risk at this anchor.
-          </div>
-        )}
-        {organ.z_score != null && (
-          <div className="flex justify-between items-center">
-            <span className="text-vitalis-muted text-[11px]">Z-score (vs baseline):</span>
-            <span
-              className={cn(
-                'font-mono text-[11px] font-semibold',
-                Math.abs(organ.z_score) > 2
-                  ? 'text-vitalis-critical'
-                  : Math.abs(organ.z_score) > 1
-                  ? 'text-amber-700'
-                  : 'text-emerald-700'
-              )}
-            >
-              {organ.z_score > 0 ? '+' : ''}{organ.z_score.toFixed(2)}σ
-            </span>
-          </div>
-        )}
-      </div>
-
-      <div className="mt-2 text-[10px] text-vitalis-blue flex items-center justify-end gap-1 font-medium group-hover:translate-x-0.5 transition-transform">
-        <span>Explore {organLabel(organKey)}</span>
-        <ArrowRight className="w-3 h-3" />
-      </div>
-    </div>
-  );
-};
-
-// ─── Mini Trend Chart ─────────────────────────────────────────────────────────
-
-interface MiniChartProps {
-  label: string;
-  seriesKey: string;
-  series: PatientRecord['series'];
-  baselines: PatientRecord['baselines'];
-  anchorHour: number;
-  color: string;
-}
-
-const MiniChart: React.FC<MiniChartProps> = ({ label, seriesKey, series, baselines, anchorHour, color }) => {
-  const rawPoints = series[seriesKey] ?? [];
-  const data = rawPoints
-    .filter(([, v]) => v != null)
-    .map(([h, v]) => ({ hour: h, value: v as number }))
-    .sort((a, b) => a.hour - b.hour);
-
-  const baseline = getBaselineValue(baselines, seriesKey);
-
-  if (data.length === 0) {
-    return (
-      <div className="bg-card rounded-lg border border-vitalis-border p-3 shadow-subtle">
-        <div className="text-[11px] font-semibold text-vitalis-navy mb-1">{label}</div>
-        <div className="h-[120px] flex items-center justify-center text-xs text-vitalis-muted italic">
-          No data available
-        </div>
-      </div>
-    );
-  }
-
-  const values = data.map((d) => d.value);
-  const minVal = Math.min(...values);
-  const maxVal = Math.max(...values);
-  const pad = (maxVal - minVal) * 0.15 || 1;
-  const domainMin = baseline != null ? Math.min(minVal, baseline) - pad : minVal - pad;
-  const domainMax = baseline != null ? Math.max(maxVal, baseline) + pad : maxVal + pad;
-
-  return (
-    <div className="bg-card rounded-lg border border-vitalis-border p-3 shadow-subtle">
-      <div className="text-[11px] font-semibold text-vitalis-navy mb-1 flex items-center justify-between">
-        <span>{label}</span>
-        {baseline != null && (
-          <span className="text-[10px] text-vitalis-muted font-normal">baseline: {baseline.toFixed(1)}</span>
-        )}
-      </div>
-      <ResponsiveContainer width="100%" height={120}>
-        <LineChart data={data} margin={{ top: 4, right: 8, left: -24, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#DCE4EF" vertical={false} />
-          <XAxis
-            dataKey="hour"
-            tick={{ fontSize: 9, fill: '#64748B' }}
-            stroke="#DCE4EF"
-            tickFormatter={(h) => `h${h}`}
-          />
-          <YAxis
-            domain={[domainMin, domainMax]}
-            tick={{ fontSize: 9, fill: '#64748B' }}
-            stroke="#DCE4EF"
-          />
-          <Tooltip
-            content={({ active, payload }) => {
-              if (active && payload && payload.length) {
-                return (
-                  <div className="bg-white border border-vitalis-border p-2 rounded shadow text-xs">
-                    <span className="font-mono font-bold">{(payload[0].value as number).toFixed(2)}</span>
-                    <span className="text-vitalis-muted ml-1">h{payload[0].payload.hour}</span>
-                  </div>
-                );
-              }
-              return null;
-            }}
-          />
-          {baseline != null && (
-            <ReferenceLine
-              y={baseline}
-              stroke="#94a3b8"
-              strokeDasharray="4 2"
-              label={{ value: 'BL', fill: '#94a3b8', fontSize: 9, position: 'insideTopRight' }}
-            />
-          )}
-          <ReferenceLine
-            x={anchorHour}
-            stroke="#123B82"
-            strokeDasharray="3 3"
-            label={{ value: `h${anchorHour}`, fill: '#123B82', fontSize: 9, position: 'insideTopLeft' }}
-          />
-          <Line
-            type="monotone"
-            dataKey="value"
-            stroke={color}
-            strokeWidth={2}
-            dot={false}
-            connectNulls
-          />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  );
-};
-
-// ─── Main Component ───────────────────────────────────────────────────────────
+import { Badge } from '../../common/Badge';
+import {
+  formatRiskCaption,
+  formatRiskPercent,
+  formatNotApplicableReason,
+  RISK_DISCLAIMER_CAPTION,
+} from '../../../utils/formatters';
+import { cn } from '../../../utils/cn';
 
 export const Patient360: React.FC = () => {
   const {
     selectedPatientId,
     setSelectedPatientId,
-    setCurrentPage,
-    setSelectedOrganTab,
-    language,
     selectedAnchorHour,
     setSelectedAnchorHour,
     patients,
+    setCurrentPage,
+    language,
+    t,
   } = useApp();
 
-  const { data: record, loading, error } = usePatient(selectedPatientId ?? null);
+  const { data: patient, loading: loadingPatient, error } = usePatient(selectedPatientId);
+  const [activeSeriesTab, setActiveSeriesTab] = useState<'cardio' | 'renal' | 'resp' | 'hepatic'>('cardio');
 
-  // Loading state
-  if (loading) {
-    return (
-      <div className="p-8 text-center text-vitalis-muted space-y-2">
-        <Clock className="w-8 h-8 mx-auto animate-spin text-vitalis-blue opacity-60" />
-        <p className="text-sm">Loading patient record…</p>
-      </div>
-    );
-  }
+  // Selected patient summary
+  const patientSummary = useMemo(() => {
+    return patients?.find((p) => p.id === selectedPatientId);
+  }, [patients, selectedPatientId]);
 
-  // Error state
-  if (error) {
-    return (
-      <div className="p-8 text-center space-y-2">
-        <AlertTriangle className="w-8 h-8 mx-auto text-vitalis-critical" />
-        <p className="text-sm text-vitalis-critical font-semibold">Failed to load patient data</p>
-        <p className="text-xs text-vitalis-muted">{error}</p>
-      </div>
-    );
-  }
+  // Anchors available in record
+  const anchors = useMemo(() => patient?.anchors ?? [], [patient]);
 
-  // No patient selected
-  if (!record) {
+  // Currently active anchor
+  const currentAnchor = useMemo(() => {
+    if (!anchors.length) return null;
+    const found = anchors.find((a) => a.hour === selectedAnchorHour);
+    return found || anchors[anchors.length - 1];
+  }, [anchors, selectedAnchorHour]);
+
+  const tp = t.patient360;
+
+  // Chart data formatting for Recharts
+  const chartData = useMemo(() => {
+    if (!patient?.series) return [];
+    // Collect all unique hours across series
+    const hourSet = new Set<number>();
+    Object.values(patient.series).forEach((pts) => {
+      pts.forEach(([h]) => hourSet.add(h));
+    });
+    const sortedHours = Array.from(hourSet).sort((a, b) => a - b);
+
+    // Build map for quick lookup
+    const seriesMaps: Record<string, Map<number, number | null>> = {};
+    Object.entries(patient.series).forEach(([key, pts]) => {
+      seriesMaps[key] = new Map(pts);
+    });
+
+    return sortedHours.map((hour) => {
+      const entry: Record<string, number | null> = { hour };
+      Object.keys(seriesMaps).forEach((key) => {
+        const val = seriesMaps[key].get(hour);
+        entry[key] = val !== undefined ? val : null;
+      });
+      return entry;
+    });
+  }, [patient?.series]);
+
+  const getOrganStatusBadge = (status: string) => {
+    switch (status) {
+      case 'elevated':
+        return <Badge variant="critical">Elevated Risk</Badge>;
+      case 'dysfunction_present':
+        return <Badge variant="navy">Dysfunction Present</Badge>;
+      case 'low':
+        return <Badge variant="stable">Low Risk</Badge>;
+      case 'insufficient_data':
+      default:
+        return <Badge variant="outline">Insufficient Data</Badge>;
+    }
+  };
+
+  const getTrustBadgeVariant = (trust: string): 'teal' | 'navy' | 'warning' | 'critical' => {
+    switch (trust) {
+      case 'high':
+        return 'teal';
+      case 'moderate':
+      case 'medium':
+        return 'navy';
+      case 'low':
+        return 'warning';
+      case 'insufficient':
+      default:
+        return 'critical';
+    }
+  };
+
+  if (loadingPatient) {
     return (
       <div className="p-8 text-center text-vitalis-muted">
-        <p>{language === 'hi' ? 'कोई रोगी चयनित नहीं है।' : 'No patient selected. Return to the Command Center to choose a patient.'}</p>
+        <p>Loading patient telemetry record...</p>
       </div>
     );
   }
 
-  // Derived data
-  const anchorHours = record.anchors.map((a) => a.hour).sort((a, b) => a - b);
-  const selectedAnchor: Anchor | undefined = record.anchors.find((a) => a.hour === selectedAnchorHour);
+  if (error || !patient) {
+    return (
+      <div className="p-8 text-center text-vitalis-muted">
+        <p className="text-vitalis-critical">
+          {error || 'Patient record could not be loaded.'}
+        </p>
+        <button
+          onClick={() => setCurrentPage('command-center')}
+          className="mt-4 text-xs text-vitalis-blue underline"
+        >
+          Return to Command Center
+        </button>
+      </div>
+    );
+  }
 
-  const organKeys = ['renal', 'hepatic', 'cardio', 'resp'];
-
-  // Sorted reasons (by impact desc)
-  const sortedReasons = selectedAnchor
-    ? [...selectedAnchor.reasons].sort((a, b) => b.impact - a.impact)
-    : [];
+  const organs = currentAnchor?.organs;
 
   return (
     <div className="space-y-6">
+      {/* Patient Header & Replay Clock Controls */}
+      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Left: Patient Selector & Profile */}
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <select
+              value={selectedPatientId}
+              onChange={(e) => setSelectedPatientId(e.target.value)}
+              className="appearance-none bg-slate-50 border border-vitalis-border rounded-lg pl-3 pr-8 py-2 text-sm font-bold text-vitalis-navy focus:outline-none focus:border-vitalis-blue cursor-pointer"
+            >
+              {patients.map((pat) => (
+                <option key={pat.id} value={pat.id}>
+                  {pat.id} — {pat.name} ({pat.bed})
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="w-4 h-4 text-vitalis-muted absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          </div>
 
-      {/* ── Replay Clock Slider ─────────────────────────────────────────────── */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-          <div className="flex items-center gap-2 shrink-0">
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-bold text-vitalis-text">
+                {patientSummary?.name ?? `Patient ${patient.id}`}
+              </h1>
+              <Badge variant="outline" size="xs">
+                {patient.gender === 1 ? 'Male' : 'Female'}, {patient.age}y
+              </Badge>
+              <Badge variant="navy" size="xs">
+                {patientSummary?.bed ?? 'ICU'}
+              </Badge>
+              <span className="text-[10px] text-slate-500 italic">Simulated patient</span>
+            </div>
+            <p className="text-xs text-vitalis-muted mt-0.5">
+              {patient.note || 'Continuous multi-organ ICU monitoring record'}
+            </p>
+          </div>
+        </div>
+
+        {/* Right: Replay Clock Anchor Selector */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 bg-slate-50 border border-vitalis-border p-2.5 rounded-lg">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-vitalis-navy">
             <Clock className="w-4 h-4 text-vitalis-blue" />
-            <span className="text-xs font-bold uppercase tracking-wider text-vitalis-navy">Replay Clock</span>
+            <span>Replay Anchor:</span>
           </div>
-          <div className="flex-1 flex items-center gap-3">
-            <input
-              type="range"
-              min={anchorHours[0] ?? 0}
-              max={anchorHours[anchorHours.length - 1] ?? 0}
-              step={1}
-              value={selectedAnchorHour}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                // Snap to nearest available anchor hour
-                if (anchorHours.length === 0) return;
-                const nearest = anchorHours.reduce((prev, curr) =>
-                  Math.abs(curr - v) < Math.abs(prev - v) ? curr : prev
-                );
-                setSelectedAnchorHour(nearest);
-              }}
-              className="flex-1 accent-vitalis-blue cursor-pointer"
-            />
-            <span className="text-sm font-mono font-bold text-vitalis-navy whitespace-nowrap min-w-[64px]">
-              Hour {selectedAnchorHour}
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {anchorHours.map((h) => (
+          <div className="flex items-center gap-1 overflow-x-auto max-w-xs sm:max-w-md py-0.5">
+            {anchors.map((anc) => (
               <button
-                key={h}
-                onClick={() => setSelectedAnchorHour(h)}
+                key={anc.hour}
+                type="button"
+                onClick={() => setSelectedAnchorHour(anc.hour)}
                 className={cn(
-                  'text-[10px] px-2 py-0.5 rounded font-mono border transition-all',
-                  h === selectedAnchorHour
-                    ? 'bg-vitalis-blue text-white border-vitalis-blue font-bold'
-                    : 'bg-slate-50 text-vitalis-muted border-vitalis-border hover:border-vitalis-blue/50'
+                  'px-2 py-1 rounded text-[11px] font-mono font-medium transition-all shrink-0',
+                  anc.hour === currentAnchor?.hour
+                    ? 'bg-vitalis-navy text-white font-bold shadow-subtle'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:border-vitalis-blue'
                 )}
+                title={`Anchor hour ${anc.hour}`}
               >
-                {h}
+                {anc.hour}h
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* ── Patient Header ──────────────────────────────────────────────────── */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-bold tracking-tight text-vitalis-navy font-mono">
-                {record.id}
-              </h1>
-              {record.source === 'synthetic' && (
-                <span className="text-xs bg-slate-100 text-slate-500 px-2.5 py-0.5 rounded-full border border-slate-200 font-medium">
-                  Simulated patient
-                </span>
-              )}
-              {record.source !== 'synthetic' && (
-                <span className="text-xs bg-blue-50 text-blue-700 px-2.5 py-0.5 rounded-full border border-blue-200 font-medium">
-                  {record.source}
+      {/* Modelled Risk Card & Trust Header */}
+      {currentAnchor && (
+        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+          {/* Risk Level */}
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-vitalis-muted">
+                Multi-Organ Modelled Risk
+              </span>
+              <Badge
+                variant={getTrustBadgeVariant(currentAnchor.trust.level)}
+                size="xs"
+                className="capitalize font-mono"
+              >
+                Trust: {currentAnchor.trust.level}
+              </Badge>
+            </div>
+            <div className="text-2xl font-bold font-mono text-vitalis-text flex items-baseline gap-2">
+              <span>{formatRiskCaption(currentAnchor.display_overall, currentAnchor.risk_overall, currentAnchor.trust.level)}</span>
+              {currentAnchor.threshold !== undefined && (
+                <span className="text-xs text-vitalis-muted font-normal">
+                  (threshold: {(currentAnchor.threshold * 100).toFixed(0)}%)
                 </span>
               )}
             </div>
+            <p className="text-[10px] text-vitalis-muted">
+              {RISK_DISCLAIMER_CAPTION}
+            </p>
+          </div>
 
-            <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-vitalis-muted mt-2">
-              <span>
-                Age: <strong className="text-vitalis-text">{record.age} y/o</strong>
+          {/* Data Quality Metrics */}
+          <div className="bg-slate-50 border border-vitalis-border rounded-lg p-3 space-y-1.5 text-xs">
+            <div className="flex items-center justify-between text-vitalis-muted">
+              <span>Completeness:</span>
+              <span className="font-mono font-bold text-slate-800">
+                {(currentAnchor.trust.completeness * 100).toFixed(0)}%
               </span>
-              <span>•</span>
-              <span>
-                Gender: <strong className="text-vitalis-text">{genderLabel(record.gender)}</strong>
+            </div>
+            <div className="flex items-center justify-between text-vitalis-muted">
+              <span>Consistency:</span>
+              <span className="font-mono font-bold text-slate-800">
+                {(currentAnchor.trust.consistency * 100).toFixed(0)}%
               </span>
-              {record.note && (
-                <>
-                  <span>•</span>
-                  <span className="italic text-slate-600">{record.note}</span>
-                </>
+            </div>
+            <div className="flex items-center justify-between text-vitalis-muted">
+              <span>Baseline Availability:</span>
+              <span className="font-mono font-bold text-slate-800">
+                {typeof currentAnchor.trust.baseline_availability === 'number'
+                  ? `${(currentAnchor.trust.baseline_availability * 100).toFixed(0)}%`
+                  : currentAnchor.trust.baseline_availability ? 'Yes' : 'No'}
+              </span>
+            </div>
+          </div>
+
+          {/* Quick Nav */}
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={() => setCurrentPage('cascade-graph')}
+              className="w-full flex items-center justify-between px-3 py-2 rounded border border-vitalis-border bg-slate-50 hover:bg-sky-50 hover:border-vitalis-blue text-xs font-semibold text-vitalis-navy transition-all"
+            >
+              <span className="flex items-center gap-1.5">
+                <Network className="w-3.5 h-3.5 text-vitalis-blue" />
+                Cascade Dynamics Graph
+              </span>
+              <ArrowRight className="w-3.5 h-3.5 text-vitalis-muted" />
+            </button>
+            <button
+              onClick={() => setCurrentPage('futurecast')}
+              className="w-full flex items-center justify-between px-3 py-2 rounded border border-vitalis-border bg-slate-50 hover:bg-emerald-50 hover:border-vitalis-teal text-xs font-semibold text-vitalis-navy transition-all"
+            >
+              <span className="flex items-center gap-1.5">
+                <TrendingUp className="w-3.5 h-3.5 text-vitalis-teal" />
+                FutureCast Trajectory (+4h, +8h, +12h)
+              </span>
+              <ArrowRight className="w-3.5 h-3.5 text-vitalis-muted" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 4 Organ Status Cards */}
+      {organs && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Renal */}
+          <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-1.5">
+                <Droplets className="w-4 h-4 text-vitalis-blue" />
+                Renal System
+              </span>
+              {getOrganStatusBadge(organs.renal.status)}
+            </div>
+            <div className="text-xl font-bold font-mono text-vitalis-text">
+              {organs.renal.risk !== null && organs.renal.risk !== undefined
+                ? formatRiskPercent(organs.renal.risk)
+                : '--'}
+            </div>
+            <div className="space-y-1 text-xs text-vitalis-muted border-t border-vitalis-border/60 pt-2">
+              <div className="flex justify-between">
+                <span>Z-Score:</span>
+                <span className="font-mono text-slate-700">
+                  {organs.renal.z_score !== null && organs.renal.z_score !== undefined
+                    ? organs.renal.z_score.toFixed(2)
+                    : '--'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Baseline Divergence:</span>
+                <span className="font-semibold text-slate-800">
+                  {organs.renal.change_flag ? 'Flagged' : 'Normal'}
+                </span>
+              </div>
+              {organs.renal.not_applicable_reason && (
+                <div className="text-[10px] text-amber-700 font-medium">
+                  {formatNotApplicableReason(organs.renal.not_applicable_reason)}
+                </div>
               )}
             </div>
           </div>
 
-          {/* Quick Patient Switcher */}
-          <div className="flex items-center gap-4 self-start lg:self-center">
-            <div className="border-l border-vitalis-border pl-4">
-              <label className="block text-[10px] uppercase font-semibold text-vitalis-muted mb-1">
-                Switch Patient
-              </label>
-              <div className="relative">
-                <select
-                  value={selectedPatientId}
-                  onChange={(e) => setSelectedPatientId(e.target.value)}
-                  className="bg-background border border-vitalis-border rounded-md px-2.5 py-1 text-xs text-vitalis-text focus:outline-none focus:border-vitalis-blue appearance-none pr-7"
-                >
-                  {patients.map((pt) => (
-                    <option key={pt.id} value={pt.id}>
-                      {pt.id}{pt.note ? ` — ${pt.note.slice(0, 30)}` : ''}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-vitalis-muted" />
+          {/* Hepatic */}
+          <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-1.5">
+                <Activity className="w-4 h-4 text-amber-600" />
+                Hepatic System
+              </span>
+              {getOrganStatusBadge(organs.hepatic.status)}
+            </div>
+            <div className="text-xl font-bold font-mono text-vitalis-text">
+              {organs.hepatic.risk !== null && organs.hepatic.risk !== undefined
+                ? formatRiskPercent(organs.hepatic.risk)
+                : '--'}
+            </div>
+            <div className="space-y-1 text-xs text-vitalis-muted border-t border-vitalis-border/60 pt-2">
+              <div className="flex justify-between">
+                <span>Z-Score:</span>
+                <span className="font-mono text-slate-700">
+                  {organs.hepatic.z_score !== null && organs.hepatic.z_score !== undefined
+                    ? organs.hepatic.z_score.toFixed(2)
+                    : '--'}
+                </span>
               </div>
+              <div className="flex justify-between">
+                <span>Baseline Divergence:</span>
+                <span className="font-semibold text-slate-800">
+                  {organs.hepatic.change_flag ? 'Flagged' : 'Normal'}
+                </span>
+              </div>
+              {organs.hepatic.not_applicable_reason && (
+                <div className="text-[10px] text-amber-700 font-medium">
+                  {formatNotApplicableReason(organs.hepatic.not_applicable_reason)}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Cardiac */}
+          <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-1.5">
+                <Heart className="w-4 h-4 text-vitalis-critical" />
+                Cardiovascular
+              </span>
+              {getOrganStatusBadge(organs.cardio.status)}
+            </div>
+            <div className="text-xl font-bold font-mono text-vitalis-text">
+              {organs.cardio.risk !== null && organs.cardio.risk !== undefined
+                ? formatRiskPercent(organs.cardio.risk)
+                : '--'}
+            </div>
+            <div className="space-y-1 text-xs text-vitalis-muted border-t border-vitalis-border/60 pt-2">
+              <div className="flex justify-between">
+                <span>Z-Score:</span>
+                <span className="font-mono text-slate-700">
+                  {organs.cardio.z_score !== null && organs.cardio.z_score !== undefined
+                    ? organs.cardio.z_score.toFixed(2)
+                    : '--'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Baseline Divergence:</span>
+                <span className="font-semibold text-slate-800">
+                  {organs.cardio.change_flag ? 'Flagged' : 'Normal'}
+                </span>
+              </div>
+              {organs.cardio.not_applicable_reason && (
+                <div className="text-[10px] text-amber-700 font-medium">
+                  {formatNotApplicableReason(organs.cardio.not_applicable_reason)}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Respiratory */}
+          <div className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-1.5">
+                <Wind className="w-4 h-4 text-vitalis-teal" />
+                Respiratory
+              </span>
+              {getOrganStatusBadge(organs.resp.status)}
+            </div>
+            <div className="text-xl font-bold font-mono text-vitalis-text">
+              {organs.resp.risk !== null && organs.resp.risk !== undefined
+                ? formatRiskPercent(organs.resp.risk)
+                : '--'}
+            </div>
+            <div className="space-y-1 text-xs text-vitalis-muted border-t border-vitalis-border/60 pt-2">
+              <div className="flex justify-between">
+                <span>Z-Score:</span>
+                <span className="font-mono text-slate-700">
+                  {organs.resp.z_score !== null && organs.resp.z_score !== undefined
+                    ? organs.resp.z_score.toFixed(2)
+                    : '--'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Baseline Divergence:</span>
+                <span className="font-semibold text-slate-800">
+                  {organs.resp.change_flag ? 'Flagged' : 'Normal'}
+                </span>
+              </div>
+              {organs.resp.not_applicable_reason && (
+                <div className="text-[10px] text-amber-700 font-medium">
+                  {formatNotApplicableReason(organs.resp.not_applicable_reason)}
+                </div>
+              )}
             </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* ── Overall Risk Card ───────────────────────────────────────────────── */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <div className="text-[11px] font-semibold uppercase text-vitalis-muted tracking-wider mb-1">
-              Overall Modelled Risk · 12 h Horizon
+      {/* Main Longitudinal Trend Charts & Explainability Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left: Interactive Time-Series Charts (2 Cols) */}
+        <div className="lg:col-span-2 bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-vitalis-border pb-3">
+            <div>
+              <h2 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+                Longitudinal Parameter Telemetry &amp; Baselines
+              </h2>
+              <p className="text-[11px] text-vitalis-muted mt-0.5">
+                Personal baseline reference line (dashed gray) • Vertical marker shows active anchor ({selectedAnchorHour}h)
+              </p>
             </div>
-            {!selectedAnchor ? (
-              <div className="text-sm text-vitalis-muted italic">No anchor data for Hour {selectedAnchorHour}</div>
-            ) : selectedAnchor.display_overall === 'shown' && selectedAnchor.risk_overall != null ? (
-              <>
-                <div className="flex items-baseline gap-2">
-                  <span
-                    className={cn(
-                      'text-4xl font-bold font-mono',
-                      selectedAnchor.risk_overall >= 0.8
-                        ? 'text-vitalis-critical'
-                        : selectedAnchor.risk_overall >= 0.5
-                        ? 'text-vitalis-warning'
-                        : 'text-emerald-700'
-                    )}
-                  >
-                    {(selectedAnchor.risk_overall * 100).toFixed(1)}%
-                  </span>
-                  <span className="text-xs text-vitalis-muted">modelled risk</span>
-                </div>
-                <p className="text-[10px] text-vitalis-muted mt-1 max-w-md leading-relaxed">
-                  12 h horizon · Calibrated model output on a proxy label; not a validated clinical probability.
-                </p>
-              </>
-            ) : selectedAnchor.display_overall === 'data_insufficient' ? (
-              <div className="text-sm text-vitalis-muted italic">Insufficient data at this anchor</div>
-            ) : selectedAnchor.display_overall === 'not_applicable' ? (
-              <div className="text-sm text-amber-700 font-medium">
-                Not applicable: organ dysfunction already present
-              </div>
-            ) : null}
-          </div>
 
-          {selectedAnchor && (
-            <div className="flex flex-col items-end gap-2">
-              <div className="text-[10px] text-vitalis-muted uppercase tracking-wider">Trust</div>
-              <span
+            {/* Metric Category Tabs */}
+            <div className="flex items-center bg-slate-50 border border-vitalis-border rounded-md p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setActiveSeriesTab('cardio')}
                 className={cn(
-                  'text-xs font-semibold px-3 py-1 rounded-full border',
-                  selectedAnchor.trust.level === 'high'
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                    : selectedAnchor.trust.level === 'moderate' || selectedAnchor.trust.level === 'medium'
-                    ? 'bg-blue-50 text-blue-800 border-blue-200'
-                    : selectedAnchor.trust.level === 'low'
-                    ? 'bg-amber-50 text-amber-800 border-amber-200'
-                    : 'bg-red-50 text-red-800 border-red-200'
+                  'px-2.5 py-1 rounded transition-colors',
+                  activeSeriesTab === 'cardio'
+                    ? 'bg-vitalis-navy text-white font-semibold'
+                    : 'text-vitalis-muted hover:text-vitalis-text'
                 )}
               >
-                Trust: {selectedAnchor.trust.level}
-              </span>
-              <div className="text-[10px] text-vitalis-muted text-right space-y-0.5">
-                <div>Completeness: {(selectedAnchor.trust.completeness * 100).toFixed(0)}%</div>
-                <div>Consistency: {(selectedAnchor.trust.consistency * 100).toFixed(0)}%</div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── 4 Organ Cards ──────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {organKeys.map((key) => {
-          const organ = selectedAnchor?.organs?.[key];
-          if (!organ) {
-            return (
-              <div
-                key={key}
-                className="bg-card rounded-lg border border-vitalis-border p-4 shadow-subtle"
+                Cardiovascular (MAP, HR)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSeriesTab('renal')}
+                className={cn(
+                  'px-2.5 py-1 rounded transition-colors',
+                  activeSeriesTab === 'renal'
+                    ? 'bg-vitalis-navy text-white font-semibold'
+                    : 'text-vitalis-muted hover:text-vitalis-text'
+                )}
               >
-                <div className="flex items-center gap-2 mb-3">
-                  <div className={cn('w-7 h-7 rounded flex items-center justify-center font-bold text-xs border', organIconBg(key))}>
-                    {organIcon(key)}
-                  </div>
-                  <h2 className="text-xs font-bold text-vitalis-navy">{organLabel(key)}</h2>
-                </div>
-                <div className="text-[11px] text-vitalis-muted italic">No anchor data</div>
-              </div>
-            );
-          }
-          return (
-            <OrganCard
-              key={key}
-              organKey={key}
-              organ={organ}
-              onNavigate={() => {
-                setSelectedOrganTab(organTabKey(key) as any);
-                setCurrentPage('organ-intelligence');
-              }}
-            />
-          );
-        })}
-      </div>
+                Renal (Creatinine, BUN)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSeriesTab('resp')}
+                className={cn(
+                  'px-2.5 py-1 rounded transition-colors',
+                  activeSeriesTab === 'resp'
+                    ? 'bg-vitalis-navy text-white font-semibold'
+                    : 'text-vitalis-muted hover:text-vitalis-text'
+                )}
+              >
+                Respiratory (SpO2, Resp, FiO2)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSeriesTab('hepatic')}
+                className={cn(
+                  'px-2.5 py-1 rounded transition-colors',
+                  activeSeriesTab === 'hepatic'
+                    ? 'bg-vitalis-navy text-white font-semibold'
+                    : 'text-vitalis-muted hover:text-vitalis-text'
+                )}
+              >
+                Hepatic (Bilirubin, Lactate)
+              </button>
+            </div>
+          </div>
 
-      {/* ── Trend Charts ───────────────────────────────────────────────────── */}
-      <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
-        <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-vitalis-blue" />
-          <h2 className="text-sm font-bold text-vitalis-navy">Vital & Lab Trends</h2>
-          <span className="text-[10px] text-vitalis-muted ml-auto">
-            Blue dashed line = selected anchor hour · Grey dashed = personal baseline
-          </span>
+          {/* Primary Chart */}
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#DCE4EF" vertical={false} />
+                <XAxis
+                  dataKey="hour"
+                  stroke="#64748B"
+                  fontSize={11}
+                  tickLine={false}
+                  tickFormatter={(val) => `${val}h`}
+                />
+                <YAxis stroke="#64748B" fontSize={11} tickLine={false} domain={['auto', 'auto']} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#FFFFFF',
+                    borderColor: '#DCE4EF',
+                    borderRadius: '8px',
+                    fontSize: '11px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+                  }}
+                  formatter={(value: any, name: string) => [
+                    typeof value === 'number' ? value.toFixed(2) : '--',
+                    name,
+                  ]}
+                  labelFormatter={(val) => `ICU Hour: ${val}h`}
+                />
+
+                {/* Selected anchor vertical line */}
+                <ReferenceLine
+                  x={selectedAnchorHour}
+                  stroke="#DC2626"
+                  strokeDasharray="3 3"
+                  label={{
+                    value: `Anchor ${selectedAnchorHour}h`,
+                    position: 'top',
+                    fill: '#DC2626',
+                    fontSize: 10,
+                  }}
+                />
+
+                {/* Cardio Lines */}
+                {activeSeriesTab === 'cardio' && (
+                  <>
+                    {typeof patient.baselines?.MAP === 'number' && (
+                      <ReferenceLine
+                        y={patient.baselines.MAP}
+                        stroke="#94A3B8"
+                        strokeDasharray="4 4"
+                        label={{ value: 'MAP Baseline', position: 'right', fill: '#64748B', fontSize: 10 }}
+                      />
+                    )}
+                    <Line
+                      type="monotone"
+                      dataKey="MAP"
+                      stroke="#2563EB"
+                      strokeWidth={2}
+                      dot={false}
+                      name="Mean Arterial Pressure (mmHg)"
+                      connectNulls
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="HR"
+                      stroke="#DC2626"
+                      strokeWidth={1.5}
+                      dot={false}
+                      name="Heart Rate (bpm)"
+                      connectNulls
+                    />
+                  </>
+                )}
+
+                {/* Renal Lines */}
+                {activeSeriesTab === 'renal' && (
+                  <>
+                    {typeof patient.baselines?.Creatinine === 'number' && (
+                      <ReferenceLine
+                        y={patient.baselines.Creatinine}
+                        stroke="#94A3B8"
+                        strokeDasharray="4 4"
+                        label={{ value: 'Creatinine Baseline', position: 'right', fill: '#64748B', fontSize: 10 }}
+                      />
+                    )}
+                    <Line
+                      type="monotone"
+                      dataKey="Creatinine"
+                      stroke="#123B82"
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: '#123B82' }}
+                      name="Creatinine (mg/dL)"
+                      connectNulls
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="BUN"
+                      stroke="#D97706"
+                      strokeWidth={1.5}
+                      dot={{ r: 2.5, fill: '#D97706' }}
+                      name="BUN (mg/dL)"
+                      connectNulls
+                    />
+                  </>
+                )}
+
+                {/* Resp Lines */}
+                {activeSeriesTab === 'resp' && (
+                  <>
+                    {typeof patient.baselines?.O2Sat === 'number' && (
+                      <ReferenceLine
+                        y={patient.baselines.O2Sat}
+                        stroke="#94A3B8"
+                        strokeDasharray="4 4"
+                        label={{ value: 'SpO2 Baseline', position: 'right', fill: '#64748B', fontSize: 10 }}
+                      />
+                    )}
+                    <Line
+                      type="monotone"
+                      dataKey="O2Sat"
+                      stroke="#0D9488"
+                      strokeWidth={2}
+                      dot={false}
+                      name="SpO2 (%)"
+                      connectNulls
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="Resp"
+                      stroke="#2563EB"
+                      strokeWidth={1.5}
+                      dot={false}
+                      name="Respiratory Rate (bpm)"
+                      connectNulls
+                    />
+                  </>
+                )}
+
+                {/* Hepatic Lines */}
+                {activeSeriesTab === 'hepatic' && (
+                  <>
+                    <Line
+                      type="monotone"
+                      dataKey="Lactate"
+                      stroke="#DC2626"
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: '#DC2626' }}
+                      name="Lactate (mmol/L)"
+                      connectNulls
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="Bilirubin_total"
+                      stroke="#D97706"
+                      strokeWidth={1.5}
+                      dot={{ r: 3, fill: '#D97706' }}
+                      name="Total Bilirubin (mg/dL)"
+                      connectNulls
+                    />
+                  </>
+                )}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <MiniChart label="Heart Rate (HR)" seriesKey="HR" series={record.series} baselines={record.baselines} anchorHour={selectedAnchorHour} color="#2563EB" />
-          <MiniChart label="Mean Arterial Pressure (MAP)" seriesKey="MAP" series={record.series} baselines={record.baselines} anchorHour={selectedAnchorHour} color="#123B82" />
-          <MiniChart label="Respiratory Rate (Resp)" seriesKey="Resp" series={record.series} baselines={record.baselines} anchorHour={selectedAnchorHour} color="#0D9488" />
-          <MiniChart label="O₂ Saturation (SpO₂)" seriesKey="O2Sat" series={record.series} baselines={record.baselines} anchorHour={selectedAnchorHour} color="#0891b2" />
-          <MiniChart label="Creatinine" seriesKey="Creatinine" series={record.series} baselines={record.baselines} anchorHour={selectedAnchorHour} color="#7c3aed" />
-          <MiniChart label="BUN" seriesKey="BUN" series={record.series} baselines={record.baselines} anchorHour={selectedAnchorHour} color="#b45309" />
-        </div>
-      </div>
 
-      {/* ── Lower Grid: Why Flagged + Navigation ───────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-        {/* Left: Explainability / Why Flagged */}
-        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3">
-          <div className="flex items-center justify-between">
+        {/* Right: Explainability Panel ("Why was this flagged?") */}
+        <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-4">
+          <div className="flex items-center justify-between border-b border-vitalis-border pb-2.5">
             <div className="flex items-center gap-2">
               <Layers className="w-4 h-4 text-vitalis-navy" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy">
-                Why Flagged — Feature Attribution
+              <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-text">
+                Why was this flagged? (Anchor {currentAnchor?.hour}h)
               </h3>
             </div>
-            <span className="text-[10px] font-semibold text-vitalis-muted bg-slate-100 px-2 py-0.5 rounded">
-              Sorted by impact
+            <span className="text-[10px] text-vitalis-muted font-mono">
+              SHAP Attributions
             </span>
           </div>
 
-          {!selectedAnchor ? (
-            <div className="text-sm text-vitalis-muted italic py-4 text-center">
-              No anchor selected
-            </div>
-          ) : sortedReasons.length === 0 ? (
-            <div className="text-sm text-vitalis-muted italic py-4 text-center">
-              No explainability factors available at this anchor.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {sortedReasons.map((reason, idx) => {
-                const isHigher = reason.effect?.toLowerCase().includes('higher');
-                const isLower = reason.effect?.toLowerCase().includes('lower');
-                return (
-                  <div
-                    key={idx}
-                    className="border-b border-vitalis-border/60 pb-2.5 last:border-0 last:pb-0 text-xs"
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-1">
-                      <span className="font-semibold text-slate-800 leading-snug flex-1">
-                        {reason.text}
-                      </span>
-                      <span
-                        className={cn(
-                          'shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded border',
-                          isHigher
-                            ? 'bg-red-50 text-red-700 border-red-200'
-                            : isLower
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-slate-100 text-slate-600 border-slate-200'
-                        )}
-                      >
-                        {reason.effect}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <div className="flex-1 bg-slate-100 h-1 rounded-full overflow-hidden">
-                        <div
-                          className={cn('h-full rounded-full', isHigher ? 'bg-red-400' : isLower ? 'bg-emerald-400' : 'bg-slate-400')}
-                          style={{ width: `${Math.min(Math.abs(reason.impact) * 100, 100)}%` }}
-                        />
-                      </div>
-                      <span className="text-[10px] text-vitalis-muted font-mono shrink-0">
-                        {reason.impact.toFixed(3)}
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-vitalis-muted mt-0.5 font-mono">{reason.feature}</div>
+          <div className="space-y-3">
+            {currentAnchor?.reasons && currentAnchor.reasons.length > 0 ? (
+              currentAnchor.reasons.map((r, idx) => (
+                <div
+                  key={idx}
+                  className="p-2.5 rounded-lg border border-vitalis-border bg-slate-50/60 space-y-1.5 text-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-800 font-mono text-[11px]">
+                      {r.feature}
+                    </span>
+                    <Badge
+                      variant={r.effect.includes('higher') ? 'critical' : 'stable'}
+                      size="xs"
+                    >
+                      {r.effect}
+                    </Badge>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Right: Navigation + Data Trust quick stats */}
-        <div className="space-y-6">
-
-          {/* Navigation Cards */}
-          <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy flex items-center gap-2">
-              <Network className="w-4 h-4" />
-              Explore Further
-            </h3>
-            <div className="space-y-2">
-              <button
-                onClick={() => setCurrentPage('cascade-graph')}
-                className="w-full flex items-center justify-between px-4 py-2.5 rounded-md border border-vitalis-border bg-slate-50 hover:bg-blue-50 hover:border-vitalis-blue/40 transition-all text-xs font-semibold text-vitalis-navy group"
-              >
-                <span className="flex items-center gap-2">
-                  <Network className="w-3.5 h-3.5 text-vitalis-blue" />
-                  Open Cascade Graph
-                </span>
-                <ArrowRight className="w-3.5 h-3.5 text-vitalis-muted group-hover:text-vitalis-blue group-hover:translate-x-0.5 transition-transform" />
-              </button>
-              <button
-                onClick={() => setCurrentPage('futurecast')}
-                className="w-full flex items-center justify-between px-4 py-2.5 rounded-md border border-vitalis-border bg-slate-50 hover:bg-blue-50 hover:border-vitalis-blue/40 transition-all text-xs font-semibold text-vitalis-navy group"
-              >
-                <span className="flex items-center gap-2">
-                  <TrendingUp className="w-3.5 h-3.5 text-vitalis-blue" />
-                  Open FutureCast
-                </span>
-                <ArrowRight className="w-3.5 h-3.5 text-vitalis-muted group-hover:text-vitalis-blue group-hover:translate-x-0.5 transition-transform" />
-              </button>
-              <button
-                onClick={() => setCurrentPage('data-trust')}
-                className="w-full flex items-center justify-between px-4 py-2.5 rounded-md border border-vitalis-border bg-slate-50 hover:bg-blue-50 hover:border-vitalis-blue/40 transition-all text-xs font-semibold text-vitalis-navy group"
-              >
-                <span className="flex items-center gap-2">
-                  <ShieldCheck className="w-3.5 h-3.5 text-vitalis-teal" />
-                  Open Data Trust
-                </span>
-                <ArrowRight className="w-3.5 h-3.5 text-vitalis-muted group-hover:text-vitalis-blue group-hover:translate-x-0.5 transition-transform" />
-              </button>
-            </div>
+                  <p className="text-[11px] text-slate-700 leading-snug">
+                    {r.text}
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                      <div
+                        className={cn(
+                          'h-full rounded-full',
+                          r.effect.includes('higher') ? 'bg-vitalis-critical' : 'bg-emerald-500'
+                        )}
+                        style={{ width: `${Math.min(100, Math.max(10, r.impact * 100))}%` }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500 shrink-0">
+                      {(r.impact).toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-xs text-vitalis-muted py-4 text-center">
+                No dominant risk factors flagged at this anchor.
+              </p>
+            )}
           </div>
 
-          {/* Data Trust Quick Stats (from selected anchor trust) */}
-          {selectedAnchor && (
-            <div className="bg-card rounded-lg border border-vitalis-border p-5 shadow-subtle space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-vitalis-teal" />
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-vitalis-navy">
-                    Data Trust — Hour {selectedAnchorHour}
-                  </h3>
-                </div>
-                <button
-                  onClick={() => setCurrentPage('data-trust')}
-                  className="text-xs font-semibold text-vitalis-blue hover:underline flex items-center gap-1"
-                >
-                  Inspect <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="bg-slate-50 border border-vitalis-border rounded p-2.5">
-                  <span className="text-[10px] text-vitalis-muted uppercase tracking-wider block">Completeness</span>
-                  <span className="font-mono font-bold text-slate-800 text-base">
-                    {(selectedAnchor.trust.completeness * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <div className="bg-slate-50 border border-vitalis-border rounded p-2.5">
-                  <span className="text-[10px] text-vitalis-muted uppercase tracking-wider block">Consistency</span>
-                  <span className="font-mono font-bold text-slate-800 text-base">
-                    {(selectedAnchor.trust.consistency * 100).toFixed(0)}%
-                  </span>
-                </div>
-              </div>
-              {selectedAnchor.trust.reasons.length > 0 && (
-                <div className="text-[11px] bg-amber-50 border border-amber-200 rounded p-2 text-amber-900 space-y-1">
-                  <div className="font-semibold flex items-center gap-1 text-amber-800">
-                    <AlertTriangle className="w-3 h-3 text-amber-700" />
-                    <span>Trust notices:</span>
-                  </div>
-                  <ul className="list-disc pl-4 space-y-0.5 text-[10px]">
-                    {selectedAnchor.trust.reasons.map((r, i) => (
-                      <li key={i}>{r}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
+          {/* Clinical Guardrail Footer */}
+          <div className="p-2.5 rounded bg-amber-50/60 border border-amber-200 text-[10px] text-amber-800 leading-relaxed">
+            Attribution scores reflect model sensitivity on proxy features. They do not constitute etiologic diagnoses or treatment guidance.
+          </div>
         </div>
       </div>
     </div>

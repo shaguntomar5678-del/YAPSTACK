@@ -124,3 +124,5 @@ export const useApp = () => {
   }
   return context;
 };
+
+export const useAppContext = useApp;
