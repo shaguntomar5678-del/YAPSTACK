@@ -2,7 +2,7 @@ export type Language = 'en' | 'hi';
 
 export const translations = {
   en: {
-    brandName: 'ANGASUTRA',
+    brandName: 'ANGASETU',
     brandTagline: 'Multi-Organ Intelligence',
     prototypeLabel: 'PROTOTYPE',
     nav: {
@@ -189,8 +189,8 @@ export const translations = {
     }
   },
   hi: {
-    brandName: 'अङ्गसूत्र',
-    brandTagline: 'बहु-अङ्ग चिकित्सीय प्रज्ञा (ASt)',
+    brandName: 'अंगसेतु',
+    brandTagline: 'बहु-अङ्ग चिकित्सीय प्रज्ञा (AS)',
     prototypeLabel: 'प्रोटोटाइप',
     nav: {
       commandCenter: 'कमांड सेंटर',

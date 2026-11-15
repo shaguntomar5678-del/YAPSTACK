@@ -30,7 +30,6 @@ export const Topbar: React.FC = () => {
     whatif: { en: 'What-if Lab', hi: 'यदि-प्रयोगशाला' },
     alerts: { en: 'Alert Center', hi: 'चेतावनी केंद्र' },
     'data-trust': { en: 'Data Trust', hi: 'डेटा विश्वसनीयता' },
-    'model-card': { en: 'Model Card', hi: 'मॉडल कार्ड' },
   };
 
   const activeTitle = language === 'hi' ? pageTitles[currentPage].hi : pageTitles[currentPage].en;
@@ -40,11 +39,11 @@ export const Topbar: React.FC = () => {
       {/* Breadcrumbs */}
       <div className="flex items-center gap-2 text-xs">
         <span className="font-bold text-vitalis-navy tracking-wide">
-          {language === 'hi' ? 'अंगसूत्र (ASt)' : 'ANGASUTRA'}
+          {language === 'hi' ? 'अंगसेतु (AS)' : 'ANGASETU'}
         </span>
         <ChevronRight className="w-3.5 h-3.5 text-vitalis-muted" />
         <span className="text-vitalis-text font-semibold">{activeTitle}</span>
-        {selectedPatientId && currentPage !== 'command-center' && currentPage !== 'model-card' && (
+        {selectedPatientId && currentPage !== 'command-center' && (
           <>
             <ChevronRight className="w-3.5 h-3.5 text-vitalis-muted" />
             <span className="text-vitalis-navy font-semibold bg-vitalis-navy/5 px-2 py-0.5 rounded border border-vitalis-navy/10">
@@ -120,21 +119,6 @@ export const Topbar: React.FC = () => {
               {unacknowledgedAlertCount}
             </span>
           )}
-        </button>
-
-        {/* Model Card quick-link */}
-        <button
-          onClick={() => setCurrentPage('model-card')}
-          className={cn(
-            'flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border transition-all font-medium',
-            currentPage === 'model-card'
-              ? 'bg-vitalis-navy text-white border-vitalis-navy'
-              : 'text-vitalis-muted border-vitalis-border hover:border-vitalis-blue hover:text-vitalis-navy'
-          )}
-          title="ML Model Card"
-        >
-          <FlaskConical className="w-3.5 h-3.5" />
-          {language === 'hi' ? 'मॉडल' : 'Model Card'}
         </button>
 
         {/* User Profile */}

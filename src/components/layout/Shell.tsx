@@ -21,7 +21,7 @@ export const Shell: React.FC<ShellProps> = ({ children }) => {
           {/* Global Clinical Sub-banner */}
           <div className="bg-sky-50/80 border-b border-sky-100 px-6 py-1.5 flex items-center justify-between text-[11px] text-sky-900 shrink-0">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-vitalis-navy">ANGASUTRA CLINICAL INTELLIGENCE</span>
+              <span className="font-bold text-vitalis-navy">ANGASETU CLINICAL INTELLIGENCE</span>
               <span>•</span>
               <span className="text-slate-600">Advanced multi-organ failure early warning &amp; cascade dynamics</span>
             </div>

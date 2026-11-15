@@ -12,8 +12,7 @@ export type AppPage =
   | 'futurecast'
   | 'whatif'
   | 'alerts'
-  | 'data-trust'
-  | 'model-card';
+  | 'data-trust';
 
 interface AppContextValue {
   language: Language;

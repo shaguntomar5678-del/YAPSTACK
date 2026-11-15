@@ -82,12 +82,6 @@ export const Sidebar: React.FC = () => {
       labelHi: 'डेटा विश्वसनीयता',
       icon: <ShieldCheck className="w-4 h-4" />,
     },
-    {
-      id: 'model-card',
-      labelEn: 'Model Card',
-      labelHi: 'मॉडल कार्ड',
-      icon: <ClipboardList className="w-4 h-4" />,
-    },
   ];
 
   return (
@@ -100,10 +94,10 @@ export const Sidebar: React.FC = () => {
         <div className="overflow-hidden">
           <div className="flex items-center gap-1.5">
             <span className="text-sm font-bold tracking-wider text-vitalis-navy truncate">
-              {language === 'hi' ? 'अंगसूत्र' : 'ANGASUTRA'}
+              {language === 'hi' ? 'अंगसेतु' : 'ANGASETU'}
             </span>
             <span className="text-[10px] bg-vitalis-teal/15 text-vitalis-teal px-1 py-0.5 rounded font-semibold uppercase tracking-wider shrink-0">
-              ASt
+              AS
             </span>
           </div>
           <p className="text-[10px] text-vitalis-muted font-medium truncate">
@@ -159,41 +153,6 @@ export const Sidebar: React.FC = () => {
             </button>
           );
         })}
-
-        {/* Divider before Model Card */}
-        <div className="pt-2 mt-2 border-t border-vitalis-border">
-          <div className="px-3 pb-2 text-[10px] font-semibold text-vitalis-muted uppercase tracking-wider">
-            {language === 'hi' ? 'मॉडल सत्यापन' : 'Model Validation'}
-          </div>
-          {navItems.slice(8).map((item) => {
-            const isActive = currentPage === item.id;
-            const label = language === 'hi' ? item.labelHi : item.labelEn;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setCurrentPage(item.id)}
-                className={cn(
-                  'w-full flex items-center justify-between px-3 py-2 rounded-md text-xs font-medium transition-all group',
-                  isActive
-                    ? 'bg-vitalis-navy text-white shadow-subtle'
-                    : 'text-vitalis-text hover:bg-slate-100 hover:text-vitalis-navy'
-                )}
-              >
-                <div className="flex items-center gap-2.5 truncate">
-                  <span
-                    className={cn(
-                      'transition-colors shrink-0',
-                      isActive ? 'text-sky-300' : 'text-vitalis-muted group-hover:text-vitalis-navy'
-                    )}
-                  >
-                    {item.icon}
-                  </span>
-                  <span className="truncate">{label}</span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
       </nav>
 
       {/* Active Patient Focus Card */}
@@ -221,7 +180,7 @@ export const Sidebar: React.FC = () => {
 
       {/* System Version */}
       <div className="px-4 py-2.5 border-t border-vitalis-border text-[10px] text-vitalis-muted flex items-center justify-between bg-white shrink-0">
-        <span>ASt v2.4 · ML v0</span>
+        <span>AS v2.4 · ML v0</span>
         <span className="flex items-center gap-1 text-emerald-600 font-medium">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           {language === 'hi' ? 'पाइपलाइन सक्रिय' : 'Pipeline Active'}
